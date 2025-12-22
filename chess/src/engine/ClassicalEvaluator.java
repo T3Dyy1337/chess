@@ -3,478 +3,416 @@ package engine;
 import util.BitHelper;
 import util.Constants;
 
+/**
+ * Evaluation is "white minus black" (positive = good for white).
+ * Final score is returned from side-to-move perspective (tempo baked in too).
+ */
 public final class ClassicalEvaluator {
 
-    private static final int PAWN   = 100;
-    private static final int KNIGHT = 320;
-    private static final int BISHOP = 330;
-    private static final int ROOK   = 500;
-    private static final int QUEEN  = 900;
+    // -----------------------------
+    // Weights (tune these!)
+    // -----------------------------
+    private static final int TEMPO_BONUS = 12;
 
-    private static final int PH_N = 1, PH_B = 1, PH_R = 2, PH_Q = 4; // per piece
-    private static final int PHASE_MAX = 24;
+    // Pawn structure
+    private static final int DOUBLED_PAWN_PENALTY = 12;
+    private static final int ISOLATED_PAWN_PENALTY = 10;
+    private static final int BACKWARD_PAWN_PENALTY = 8;
+    private static final int PASSED_PAWN_BONUS_BASE = 14;
+    private static final int PASSED_PAWN_BONUS_PER_RANK = 10; // more advanced = more bonus
 
+    // Piece evaluation / patterns
+    private static final int BISHOP_PAIR_BONUS = 25;
+    private static final int ROOK_OPEN_FILE_BONUS = 18;
+    private static final int ROOK_SEMI_OPEN_FILE_BONUS = 10;
+    private static final int KNIGHT_OUTPOST_BONUS = 14;
 
-    private static final int[] PAWN_PST = {
-        0,  0,  0,  0,  0,  0,  0,  0,
-        5, 10, 10,-20,-20, 10, 10,  5,
-        5, -5,-10,  0,  0,-10, -5,  5,
-        0,  0,  0, 20, 20,  0,  0,  0,
-        5,  5, 10, 25, 25, 10,  5,  5,
-        10, 10, 20, 30, 30, 20, 10, 10,
-        50, 50, 50, 50, 50, 50, 50, 50,
-        0,  0,  0,  0,  0,  0,  0,  0
-    };
+    // Mobility
+    private static final int MOBILITY_N = 4;
+    private static final int MOBILITY_B = 4;
+    private static final int MOBILITY_R = 2;
+    private static final int MOBILITY_Q = 1;
 
-    private static final int[] KNIGHT_PST = {
-        -50,-40,-30,-30,-30,-30,-40,-50,
-        -40,-20,  0,  5,  5,  0,-20,-40,
-        -30,  5, 10, 15, 15, 10,  5,-30,
-        -30,  0, 15, 20, 20, 15,  0,-30,
-        -30,  5, 15, 20, 20, 15,  5,-30,
-        -30,  0, 10, 15, 15, 10,  0,-30,
-        -40,-20,  0,  0,  0,  0,-20,-40,
-        -50,-40,-30,-30,-30,-30,-40,-50
-    };
+    // Center & space
+    private static final long CENTER_4 = sqBB(Constants.D4) | sqBB(Constants.E4) | sqBB(Constants.D5) | sqBB(Constants.E5);
+    private static final long EXT_CENTER = CENTER_4
+        | sqBB(Constants.C3) | sqBB(Constants.D3) | sqBB(Constants.E3) | sqBB(Constants.F3)
+        | sqBB(Constants.C4) | sqBB(Constants.F4)
+        | sqBB(Constants.C5) | sqBB(Constants.F5)
+        | sqBB(Constants.C6) | sqBB(Constants.D6) | sqBB(Constants.E6) | sqBB(Constants.F6);
 
-    private static final int[] BISHOP_PST = {
-        -20,-10,-10,-10,-10,-10,-10,-20,
-        -10,  5,  0,  0,  0,  0,  5,-10,
-        -10, 10, 10, 10, 10, 10, 10,-10,
-        -10,  0, 10, 10, 10, 10,  0,-10,
-        -10,  5,  5, 10, 10,  5,  5,-10,
-        -10,  0,  5, 10, 10,  5,  0,-10,
-        -10,  0,  0,  0,  0,  0,  0,-10,
-        -20,-10,-10,-10,-10,-10,-10,-20
-    };
+    private static final int CENTER_CONTROL_BONUS = 6;  // per controlled square in CENTER_4
+    private static final int EXT_CENTER_CONTROL_BONUS = 2; // per controlled square in EXT_CENTER
+    private static final int SPACE_BONUS_PER_SQ = 1; // per advanced-controlled square on enemy half
 
-    private static final int[] ROOK_PST = {
-        0,  0,  5, 10, 10,  5,  0,  0,
-        -5,  0,  0,  0,  0,  0,  0, -5,
-        -5,  0,  0,  0,  0,  0,  0, -5,
-        -5,  0,  0,  0,  0,  0,  0, -5,
-        -5,  0,  0,  0,  0,  0,  0, -5,
-        -5,  0,  0,  0,  0,  0,  0, -5,
-        5, 10, 10, 10, 10, 10, 10,  5,
-        0,  0,  0,  0,  0,  0,  0,  0
-    };
+    // Connectivity / trapped / king safety
+    private static final int CONNECTIVITY_BONUS_PER_DEFENDED_PIECE = 2;
+    private static final int TRAPPED_PIECE_PENALTY = 25;
 
-    private static final int[] QUEEN_PST = {
-        -20,-10,-10, -5, -5,-10,-10,-20,
-        -10,  0,  0,  0,  0,  0,  0,-10,
-        -10,  0,  5,  5,  5,  5,  0,-10,
-        -5,  0,  5,  5,  5,  5,  0, -5,
-        0,  0,  5,  5,  5,  5,  0, -5,
-        -10,  5,  5,  5,  5,  5,  0,-10,
-        -10,  0,  5,  0,  0,  0,  0,-10,
-        -20,-10,-10, -5, -5,-10,-10,-20
-    };
+    private static final int KING_SAFETY_PAWN_SHIELD = 10; // per shield pawn
+    private static final int KING_DANGER_ATTACK = 6;       // per attacker in king zone (scaled)
 
-    private static final int[] KING_MG_PST = {
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -20,-30,-30,-40,-40,-30,-30,-20,
-        -10,-20,-20,-20,-20,-20,-20,-10,
-        20, 20,  0,  0,  0,  0, 20, 20,
-        20, 30, 10,  0,  0, 10, 30, 20
-    };
-
-    private static final int[] KING_EG_PST = {
-        -50,-30,-30,-30,-30,-30,-30,-50,
-        -30,-10,  0,  0,  0,  0,-10,-30,
-        -30,  0, 10, 15, 15, 10,  0,-30,
-        -30,  5, 15, 20, 20, 15,  5,-30,
-        -30,  5, 15, 20, 20, 15,  5,-30,
-        -30,  0, 10, 15, 15, 10,  0,-30,
-        -30,-10,  0,  0,  0,  0,-10,-30,
-        -50,-30,-30,-30,-30,-30,-30,-50
-    };
-
-    private static final int[] PASSED_BONUS = { 0,  5, 10, 20, 35, 55, 85, 0 };
+    // Tapered eval (midgame/endgame blend)
+    // Typical phase weights: N=1, B=1, R=2, Q=4 (kings excluded)
+    private static final int PHASE_N = 1, PHASE_B = 1, PHASE_R = 2, PHASE_Q = 4;
+    private static final int PHASE_MAX = 2 * (2*PHASE_N + 2*PHASE_B + 2*PHASE_R + 1*PHASE_Q); // both sides
 
 
     public static int evaluate(Board b) {
-        int score = 0; // white POV
+        // --- Material ---
+        int material = material(b);
 
-        final int phase = gamePhase(b);
-        final int mgW = phase;
-        final int egW = PHASE_MAX - phase;
+        // --- Piece-square tables (tapered mg/eg) ---
+        int phase = gamePhase(b);
+        int pstMg = pst(b, true);
+        int pstEg = pst(b, false);
+        int pst = taper(pstMg, pstEg, phase);
 
-        score += material(b);
+        // --- Pawn structure ---
+        int pawns = pawnStructure(b);
 
-        score += pieceSquare(b, mgW, egW);
+        // --- Evaluation of pieces (bishop pair, rooks on files, outposts, etc.) ---
+        int pieces = pieceFeatures(b);
 
-        score += pawnStructure(b);
-        score += passedPawns(b, phase);
+        // --- Evaluation patterns (simple patterns you can expand) ---
+        int patterns = evalPatterns(b);
 
-        score += bishopPair(b, phase);
-        score += rookFiles(b);
+        // --- Mobility ---
+        int mobility = mobility(b);
 
-        score += mobilityAll(b);
-        score += knightOutposts(b);
+        // --- Center control ---
+        int center = centerControl(b);
 
-        score += kingSafety(b, phase);
+        // --- Connectivity (pieces defended by own pieces) ---
+        int conn = connectivity(b);
 
-        score += hangingPieces(b, phase);
+        // --- Trapped pieces (very rough heuristic) ---
+        int trapped = trappedPieces(b);
 
-        score += 8;
+        // --- King safety ---
+        int kingSafetyMg = kingSafety(b, true);
+        int kingSafetyEg = kingSafety(b, false);
+        int kingSafety = taper(kingSafetyMg, kingSafetyEg, phase);
 
-        return (b.sideToMove == Constants.WHITE) ? score : -score;
+        // --- Space ---
+        int space = space(b);
+
+        // --- Tempo ---
+        int tempo = (b.sideToMove == Constants.WHITE) ? TEMPO_BONUS : -TEMPO_BONUS;
+
+        int scoreWhiteMinusBlack =
+            material + pst + pawns + pieces + patterns + mobility + center + conn + trapped + kingSafety + space + tempo;
+
+        // Return from side-to-move perspective (common engine convention)
+        return (b.sideToMove == Constants.WHITE) ? scoreWhiteMinusBlack : -scoreWhiteMinusBlack;
     }
 
-
+    // =========================================================
+    // Material
+    // =========================================================
     private static int material(Board b) {
-        return
-            PAWN   * (Long.bitCount(b.whitePawns)   - Long.bitCount(b.blackPawns)) +
-                KNIGHT * (Long.bitCount(b.whiteKnights) - Long.bitCount(b.blackKnights)) +
-                BISHOP * (Long.bitCount(b.whiteBishops) - Long.bitCount(b.blackBishops)) +
-                ROOK   * (Long.bitCount(b.whiteRooks)   - Long.bitCount(b.blackRooks)) +
-                QUEEN  * (Long.bitCount(b.whiteQueens)  - Long.bitCount(b.blackQueens));
+        int w =
+            Constants.PAWN_VALUE   * BitHelper.popcount(b.whitePawns) +
+                Constants.KNIGHT_VALUE * BitHelper.popcount(b.whiteKnights) +
+                Constants.BISHOP_VALUE * BitHelper.popcount(b.whiteBishops) +
+                Constants.ROOK_VALUE   * BitHelper.popcount(b.whiteRooks) +
+                Constants.QUEEN_VALUE  * BitHelper.popcount(b.whiteQueens);
+
+        int bl =
+            Constants.PAWN_VALUE   * BitHelper.popcount(b.blackPawns) +
+                Constants.KNIGHT_VALUE * BitHelper.popcount(b.blackKnights) +
+                Constants.BISHOP_VALUE * BitHelper.popcount(b.blackBishops) +
+                Constants.ROOK_VALUE   * BitHelper.popcount(b.blackRooks) +
+                Constants.QUEEN_VALUE  * BitHelper.popcount(b.blackQueens);
+
+        return w - bl;
     }
 
-
-    private static int gamePhase(Board b) {
-        int phase =
-            PH_N * (Long.bitCount(b.whiteKnights) + Long.bitCount(b.blackKnights)) +
-                PH_B * (Long.bitCount(b.whiteBishops) + Long.bitCount(b.blackBishops)) +
-                PH_R * (Long.bitCount(b.whiteRooks)   + Long.bitCount(b.blackRooks)) +
-                PH_Q * (Long.bitCount(b.whiteQueens)  + Long.bitCount(b.blackQueens));
-
-        if (phase > PHASE_MAX) phase = PHASE_MAX;
-        if (phase < 0) phase = 0;
-        return phase;
-    }
-
-    private static int pieceSquare(Board b, int mgW, int egW) {
+    // =========================================================
+    // Piece-Square Tables (very standard, tune later)
+    // =========================================================
+    private static int pst(Board b, boolean midgame) {
         int score = 0;
 
-        score += pst(b.whitePawns,   PAWN_PST,   false);
-        score += pst(b.whiteKnights, KNIGHT_PST, false);
-        score += pst(b.whiteBishops, BISHOP_PST, false);
-        score += pst(b.whiteRooks,   ROOK_PST,   false);
-        score += pst(b.whiteQueens,  QUEEN_PST,  false);
+        score += pstPieces(b.whitePawns,   midgame ? PST_P_MG : PST_P_EG, true);
+        score += pstPieces(b.whiteKnights, midgame ? PST_N_MG : PST_N_EG, true);
+        score += pstPieces(b.whiteBishops, midgame ? PST_B_MG : PST_B_EG, true);
+        score += pstPieces(b.whiteRooks,   midgame ? PST_R_MG : PST_R_EG, true);
+        score += pstPieces(b.whiteQueens,  midgame ? PST_Q_MG : PST_Q_EG, true);
+        score += pstPieces(b.whiteKing,    midgame ? PST_K_MG : PST_K_EG, true);
 
-        score -= pst(b.blackPawns,   PAWN_PST,   true);
-        score -= pst(b.blackKnights, KNIGHT_PST, true);
-        score -= pst(b.blackBishops, BISHOP_PST, true);
-        score -= pst(b.blackRooks,   ROOK_PST,   true);
-        score -= pst(b.blackQueens,  QUEEN_PST,  true);
-
-        score += kingPst(b.whiteKing, false, mgW, egW);
-        score -= kingPst(b.blackKing, true,  mgW, egW);
+        score -= pstPieces(b.blackPawns,   midgame ? PST_P_MG : PST_P_EG, false);
+        score -= pstPieces(b.blackKnights, midgame ? PST_N_MG : PST_N_EG, false);
+        score -= pstPieces(b.blackBishops, midgame ? PST_B_MG : PST_B_EG, false);
+        score -= pstPieces(b.blackRooks,   midgame ? PST_R_MG : PST_R_EG, false);
+        score -= pstPieces(b.blackQueens,  midgame ? PST_Q_MG : PST_Q_EG, false);
+        score -= pstPieces(b.blackKing,    midgame ? PST_K_MG : PST_K_EG, false);
 
         return score;
     }
 
-    private static int pst(long bb, int[] table, boolean mirror) {
-        int score = 0;
+    private static int pstPieces(long bb, int[] table, boolean white) {
+        int s = 0;
         while (bb != 0) {
             int sq = Long.numberOfTrailingZeros(bb);
             bb &= bb - 1;
-            score += table[mirror ? (sq ^ 56) : sq];
+            int idx = white ? sq : mirrorVertical(sq);
+            s += table[idx];
         }
-        return score;
+        return s;
     }
 
-    private static int kingPst(long kingBB, boolean mirror, int mgW, int egW) {
-        if (kingBB == 0) return 0;
-        int sq = Long.numberOfTrailingZeros(kingBB);
-        int idx = mirror ? (sq ^ 56) : sq;
-        return (KING_MG_PST[idx] * mgW + KING_EG_PST[idx] * egW) / PHASE_MAX;
-    }
-
-
+    // =========================================================
+    // Pawn Structure
+    // =========================================================
     private static int pawnStructure(Board b) {
         int score = 0;
 
-        score -= doubledPawns(b.whitePawns) * 10;
-        score += doubledPawns(b.blackPawns) * 10;
-
-        score -= isolatedPawns(b.whitePawns) * 12;
-        score += isolatedPawns(b.blackPawns) * 12;
-
-        score -= backwardPawnsWhite(b) * 10;
-        score += backwardPawnsBlack(b) * 10;
-
-        long centerMask = (1L<<27)|(1L<<28)|(1L<<35)|(1L<<36);
-        score += Long.bitCount(b.whitePawns & centerMask) * 10;
-        score -= Long.bitCount(b.blackPawns & centerMask) * 10;
+        score += evalPawnStructureSide(b.whitePawns, b.blackPawns, true);
+        score -= evalPawnStructureSide(b.blackPawns, b.whitePawns, false);
 
         return score;
     }
 
-    private static int doubledPawns(long pawns) {
-        int count = 0;
-        for (int file = 0; file < 8; file++) {
-            long m = Constants.FILE_MASKS[file];
-            if (Long.bitCount(pawns & m) > 1) count++;
-        }
-        return count;
-    }
+    private static int evalPawnStructureSide(long myPawns, long oppPawns, boolean white) {
+        int s = 0;
 
-    private static int isolatedPawns(long pawns) {
-        int count = 0;
-        for (int file = 0; file < 8; file++) {
-            long onFile = pawns & Constants.FILE_MASKS[file];
-            if (onFile == 0) continue;
+        // Doubled pawns: count pawns per file > 1
+        for (int f = 0; f < 8; f++) {
+            long file = Constants.FILE_MASKS[f]; // your FILE_MASKS repeats per square, but first 8 are files
+            int count = BitHelper.popcount(myPawns & file);
+            if (count > 1) s -= DOUBLED_PAWN_PENALTY * (count - 1);
+        }
+
+        // Isolated pawns: no friendly pawn on adjacent files
+        for (int f = 0; f < 8; f++) {
+            long file = Constants.FILE_MASKS[f];
+            long pawnsOnFile = myPawns & file;
+            if (pawnsOnFile == 0) continue;
 
             long adj = 0;
-            if (file > 0) adj |= pawns & Constants.FILE_MASKS[file - 1];
-            if (file < 7) adj |= pawns & Constants.FILE_MASKS[file + 1];
+            if (f > 0) adj |= Constants.FILE_MASKS[f - 1];
+            if (f < 7) adj |= Constants.FILE_MASKS[f + 1];
 
-            if (adj == 0) count += Long.bitCount(onFile);
+            if ((myPawns & adj) == 0) {
+                // every pawn on this file is isolated
+                s -= ISOLATED_PAWN_PENALTY * BitHelper.popcount(pawnsOnFile);
+            }
         }
-        return count;
+
+        // Passed pawns: no opposing pawn in front on same/adjacent files
+        long my = myPawns;
+        while (my != 0) {
+            int sq = Long.numberOfTrailingZeros(my);
+            my &= my - 1;
+
+            int file = sq & 7;
+            long maskFiles = Constants.FILE_MASKS[file];
+            if (file > 0) maskFiles |= Constants.FILE_MASKS[file - 1];
+            if (file < 7) maskFiles |= Constants.FILE_MASKS[file + 1];
+
+            long inFront = white ? northFill(sqBB(sq)) : southFill(sqBB(sq));
+            long oppBlockers = oppPawns & maskFiles & inFront;
+
+            if (oppBlockers == 0) {
+                int rank = sq >>> 3; // 0..7
+                int adv = white ? rank : (7 - rank);
+                s += PASSED_PAWN_BONUS_BASE + PASSED_PAWN_BONUS_PER_RANK * adv;
+            } else {
+                // Backward pawn (very rough): pawn is behind its adjacent-file pawns and is blocked
+                long ahead1 = white ? (sqBB(sq) << 8) : (sqBB(sq) >>> 8);
+                boolean blocked = (ahead1 & (myPawns | oppPawns)) != 0;
+                if (blocked) {
+                    long adj = 0;
+                    if (file > 0) adj |= Constants.FILE_MASKS[file - 1];
+                    if (file < 7) adj |= Constants.FILE_MASKS[file + 1];
+
+                    // if no friendly pawn can support by being on same rank or ahead (crude)
+                    long supporters = myPawns & adj;
+                    long supportZone = white ? (inFront | sqBB(sq)) : (inFront | sqBB(sq));
+                    if ((supporters & supportZone) == 0) s -= BACKWARD_PAWN_PENALTY;
+                }
+            }
+        }
+
+        return s;
     }
 
-    private static int backwardPawnsWhite(Board b) {
-        int count = 0;
-        long wp = b.whitePawns;
-        long bp = b.blackPawns;
+    // =========================================================
+    // Evaluation of Pieces (bonuses/penalties)
+    // =========================================================
+    private static int pieceFeatures(Board b) {
+        int s = 0;
 
-        long blackPawnAttacks = blackPawnAttacks(bp);
+        // Bishop pair
+        if (BitHelper.popcount(b.whiteBishops) >= 2) s += BISHOP_PAIR_BONUS;
+        if (BitHelper.popcount(b.blackBishops) >= 2) s -= BISHOP_PAIR_BONUS;
 
-        while (wp != 0) {
-            int sq = Long.numberOfTrailingZeros(wp);
-            wp &= wp - 1;
+        // Rooks on open/semi-open files
+        s += rooksOnFiles(b.whiteRooks, b.whitePawns, b.blackPawns, true);
+        s -= rooksOnFiles(b.blackRooks, b.blackPawns, b.whitePawns, false);
+
+        // Knight outposts: knight on 4th/5th/6th rank protected by pawn and not easily chased by enemy pawn
+        s += knightOutposts(b.whiteKnights, b.whitePawns, b.blackPawns, true);
+        s -= knightOutposts(b.blackKnights, b.blackPawns, b.whitePawns, false);
+
+        return s;
+    }
+
+    private static int rooksOnFiles(long rooks, long myPawns, long oppPawns, boolean white) {
+        int s = 0;
+        long bb = rooks;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+            int f = sq & 7;
+
+            long file = Constants.FILE_MASKS[f];
+            boolean myPawnOnFile = (myPawns & file) != 0;
+            boolean oppPawnOnFile = (oppPawns & file) != 0;
+
+            if (!myPawnOnFile && !oppPawnOnFile) s += ROOK_OPEN_FILE_BONUS;
+            else if (!myPawnOnFile && oppPawnOnFile) s += ROOK_SEMI_OPEN_FILE_BONUS;
+        }
+        return s;
+    }
+
+    private static int knightOutposts(long knights, long myPawns, long oppPawns, boolean white) {
+        int s = 0;
+        long bb = knights;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
 
             int rank = sq >>> 3;
-            if (rank >= 6) continue;
-
-            int file = sq & 7;
-            int front = sq + 8;
-            if (front >= 64) continue;
-
-            if (((1L << front) & blackPawnAttacks) == 0) continue;
-
-            boolean hasSupport = false;
-            if (file > 0) {
-                long mask = Constants.FILE_MASKS[file - 1] & (~0L << (sq + 1));
-                if ((b.whitePawns & mask) != 0) hasSupport = true;
-            }
-            if (!hasSupport && file < 7) {
-                long mask = Constants.FILE_MASKS[file + 1] & (~0L << (sq + 1));
-                if ((b.whitePawns & mask) != 0) hasSupport = true;
+            if (white) {
+                if (rank < 3) continue; // needs to be at least on 4th rank
+            } else {
+                if (rank > 4) continue;
             }
 
-            if (!hasSupport) count++;
+            long sqMask = sqBB(sq);
+
+            // protected by pawn
+            long pawnProtect = white ? (BitHelper.blackAttacks(sqMask) /* squares from which white pawns attack this */)
+                : (BitHelper.whiteAttacks(sqMask));
+            boolean prot = (myPawns & pawnProtect) != 0;
+
+            // cannot be chased by enemy pawn (enemy pawn attacks that square)
+            long enemyAttacks = white ? BitHelper.attacks(Constants.BLACK, oppPawns)
+                : BitHelper.attacks(Constants.WHITE, oppPawns);
+            boolean chased = (enemyAttacks & sqMask) != 0;
+
+            if (prot && !chased) s += KNIGHT_OUTPOST_BONUS;
         }
-
-        return count;
+        return s;
     }
 
-    private static int backwardPawnsBlack(Board b) {
-        int count = 0;
-        long bp = b.blackPawns;
-        long wp = b.whitePawns;
+    // =========================================================
+    // Evaluation Patterns (starter set; expand)
+    // =========================================================
+    private static int evalPatterns(Board b) {
+        int s = 0;
 
-        long whitePawnAttacks = whitePawnAttacks(wp);
+        // Simple: bonus if you have both rooks connected (no pieces between on back rank)
+        s += connectedRooksBonus(b, true);
+        s -= connectedRooksBonus(b, false);
 
-        while (bp != 0) {
-            int sq = Long.numberOfTrailingZeros(bp);
-            bp &= bp - 1;
+        // Simple: penalty if queen comes out too early (optional; very crude)
+        // s += earlyQueenPenalty(b);
 
-            int rank = sq >>> 3;
-            if (rank <= 1) continue;
-
-            int file = sq & 7;
-            int front = sq - 8;
-            if (front < 0) continue;
-
-            if (((1L << front) & whitePawnAttacks) == 0) continue;
-
-            boolean hasSupport = false;
-            if (file > 0) {
-                long mask = Constants.FILE_MASKS[file - 1] & ((1L << sq) - 1);
-                if ((b.blackPawns & mask) != 0) hasSupport = true;
-            }
-            if (!hasSupport && file < 7) {
-                long mask = Constants.FILE_MASKS[file + 1] & ((1L << sq) - 1);
-                if ((b.blackPawns & mask) != 0) hasSupport = true;
-            }
-
-            if (!hasSupport) count++;
-        }
-
-        return count;
+        return s;
     }
 
+    private static int connectedRooksBonus(Board b, boolean white) {
+        long rooks = white ? b.whiteRooks : b.blackRooks;
+        if (BitHelper.popcount(rooks) < 2) return 0;
 
-    private static int passedPawns(Board b, int phase) {
-        int score = 0;
+        int[] sqs = BitHelper.indices(rooks);
+        int a = sqs[0], c = sqs[1];
+        if ((a >>> 3) != (c >>> 3)) return 0; // must be same rank to be "connected" here
 
-        int egBoost = (PHASE_MAX - phase); // 0..24
-
-        long wp = b.whitePawns;
-        while (wp != 0) {
-            int sq = Long.numberOfTrailingZeros(wp);
-            wp &= wp - 1;
-
-            if (isPassedPawnWhite(b, sq)) {
-                int rank = sq >>> 3;
-                int base = PASSED_BONUS[rank];
-                score += base + (base * egBoost) / 24;
-            }
-        }
-
-        long bp = b.blackPawns;
-        while (bp != 0) {
-            int sq = Long.numberOfTrailingZeros(bp);
-            bp &= bp - 1;
-
-            if (isPassedPawnBlack(b, sq)) {
-                int rank = sq >>> 3;
-                int mirrored = 7 - rank;
-                int base = PASSED_BONUS[mirrored];
-                score -= base + (base * egBoost) / 24;
-            }
-        }
-
-        return score;
+        long between = squaresBetweenOnRank(a, c);
+        long occ = b.allPieces & ~rooks;
+        if ((between & occ) == 0) return 10;
+        return 0;
     }
 
-    private static boolean isPassedPawnWhite(Board b, int sq) {
-        int file = sq & 7;
-        long mask = Constants.FILE_MASKS[file];
-        if (file > 0) mask |= Constants.FILE_MASKS[file - 1];
-        if (file < 7) mask |= Constants.FILE_MASKS[file + 1];
+    // =========================================================
+    // Mobility
+    // =========================================================
+    private static int mobility(Board b) {
+        int s = 0;
 
-        long inFront = mask & (~0L << (sq + 8)); // all squares ahead
-        return (b.blackPawns & inFront) == 0;
-    }
-
-    private static boolean isPassedPawnBlack(Board b, int sq) {
-        int file = sq & 7;
-        long mask = Constants.FILE_MASKS[file];
-        if (file > 0) mask |= Constants.FILE_MASKS[file - 1];
-        if (file < 7) mask |= Constants.FILE_MASKS[file + 1];
-
-        long inFront = mask & ((1L << sq) - 1); // all squares below
-        return (b.whitePawns & inFront) == 0;
-    }
-
-
-    private static int bishopPair(Board b, int phase) {
-        int score = 0;
-        int wb = Long.bitCount(b.whiteBishops);
-        int bb = Long.bitCount(b.blackBishops);
-
-        // bishop pair grows slightly toward endgame/open
-        int bonus = 30 + (PHASE_MAX - phase) / 2; // 30..42
-
-        if (wb >= 2) score += bonus;
-        if (bb >= 2) score -= bonus;
-        return score;
-    }
-
-    private static int rookFiles(Board b) {
-        int score = 0;
-
-        long allPawns = b.whitePawns | b.blackPawns;
-
-        long wr = b.whiteRooks;
-        while (wr != 0) {
-            int sq = Long.numberOfTrailingZeros(wr);
-            wr &= wr - 1;
-
-            int file = sq & 7;
-            long fileMask = Constants.FILE_MASKS[file];
-
-            boolean open = (fileMask & allPawns) == 0;
-            boolean semiOpen = !open && ((fileMask & b.whitePawns) == 0);
-
-            if (open) score += 20;
-            else if (semiOpen) score += 10;
-        }
-
-        long br = b.blackRooks;
-        while (br != 0) {
-            int sq = Long.numberOfTrailingZeros(br);
-            br &= br - 1;
-
-            int file = sq & 7;
-            long fileMask = Constants.FILE_MASKS[file];
-
-            boolean open = (fileMask & allPawns) == 0;
-            boolean semiOpen = !open && ((fileMask & b.blackPawns) == 0);
-
-            if (open) score -= 20;
-            else if (semiOpen) score -= 10;
-        }
-
-        return score;
-    }
-
-
-    private static int mobilityAll(Board b) {
-        int score = 0;
-
-        final int N_W = 4;
-        final int B_W = 3;
-        final int R_W = 2;
-        final int Q_W = 1;
-
-        score += N_W * knightMobility(b, b.whiteKnights, b.whitePieces);
-        score -= N_W * knightMobility(b, b.blackKnights, b.blackPieces);
-
-        score += B_W * bishopMobility(b, b.whiteBishops, b.whitePieces);
-        score -= B_W * bishopMobility(b, b.blackBishops, b.blackPieces);
-
-        score += R_W * rookMobility(b, b.whiteRooks, b.whitePieces);
-        score -= R_W * rookMobility(b, b.blackRooks, b.blackPieces);
-
-        score += Q_W * queenMobility(b, b.whiteQueens, b.whitePieces);
-        score -= Q_W * queenMobility(b, b.blackQueens, b.blackPieces);
-
-        return score;
-    }
-
-    private static int knightMobility(Board b, long knights, long own) {
-        int mob = 0;
-        while (knights != 0) {
-            int sq = Long.numberOfTrailingZeros(knights);
-            knights &= knights - 1;
-            mob += Long.bitCount(Constants.KNIGHT_MASKS[sq] & ~own);
-        }
-        return mob;
-    }
-
-    private static int bishopMobility(Board b, long bishops, long own) {
-        int mob = 0;
+        long wOcc = b.whitePawns | b.whiteKnights | b.whiteBishops | b.whiteRooks | b.whiteQueens | b.whiteKing;
+        long bOcc = b.blackPawns | b.blackKnights | b.blackBishops | b.blackRooks | b.blackQueens | b.blackKing;
         long occ = b.allPieces;
-        while (bishops != 0) {
-            int sq = Long.numberOfTrailingZeros(bishops);
-            bishops &= bishops - 1;
-            long attacks =
+
+        // White
+        s += MOBILITY_N * mobilityKnights(b.whiteKnights, wOcc);
+        s += MOBILITY_B * mobilityBishops(b.whiteBishops, occ, wOcc);
+        s += MOBILITY_R * mobilityRooks(b.whiteRooks, occ, wOcc);
+        s += MOBILITY_Q * mobilityQueens(b.whiteQueens, occ, wOcc);
+
+        // Black
+        s -= MOBILITY_N * mobilityKnights(b.blackKnights, bOcc);
+        s -= MOBILITY_B * mobilityBishops(b.blackBishops, occ, bOcc);
+        s -= MOBILITY_R * mobilityRooks(b.blackRooks, occ, bOcc);
+        s -= MOBILITY_Q * mobilityQueens(b.blackQueens, occ, bOcc);
+
+        return s;
+    }
+
+    private static int mobilityKnights(long knights, long myOcc) {
+        int m = 0;
+        long bb = knights;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+            long moves = Constants.KNIGHT_MASKS[sq] & ~myOcc;
+            m += BitHelper.popcount(moves);
+        }
+        return m;
+    }
+
+    private static int mobilityBishops(long bishops, long occ, long myOcc) {
+        int m = 0;
+        long bb = bishops;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+
+            long diag =
                 BitHelper.hyperbolaQuintessence(occ, Constants.DIAG_MASKS[sq], sq) |
                     BitHelper.hyperbolaQuintessence(occ, Constants.ANTIDIAG_MASKS[sq], sq);
-            mob += Long.bitCount(attacks & ~own);
+
+            m += BitHelper.popcount(diag & ~myOcc);
         }
-        return mob;
+        return m;
     }
 
-    private static int rookMobility(Board b, long rooks, long own) {
-        int mob = 0;
-        long occ = b.allPieces;
-        while (rooks != 0) {
-            int sq = Long.numberOfTrailingZeros(rooks);
-            rooks &= rooks - 1;
-            long attacks =
+    private static int mobilityRooks(long rooks, long occ, long myOcc) {
+        int m = 0;
+        long bb = rooks;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+
+            long ortho =
                 BitHelper.hyperbolaQuintessence(occ, Constants.RANK_MASKS[sq], sq) |
                     BitHelper.hyperbolaQuintessence(occ, Constants.FILE_MASKS[sq], sq);
-            mob += Long.bitCount(attacks & ~own);
+
+            m += BitHelper.popcount(ortho & ~myOcc);
         }
-        return mob;
+        return m;
     }
 
-    private static int queenMobility(Board b, long queens, long own) {
-        int mob = 0;
-        long occ = b.allPieces;
-        while (queens != 0) {
-            int sq = Long.numberOfTrailingZeros(queens);
-            queens &= queens - 1;
+    private static int mobilityQueens(long queens, long occ, long myOcc) {
+        int m = 0;
+        long bb = queens;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
 
             long diag =
                 BitHelper.hyperbolaQuintessence(occ, Constants.DIAG_MASKS[sq], sq) |
@@ -484,212 +422,425 @@ public final class ClassicalEvaluator {
                 BitHelper.hyperbolaQuintessence(occ, Constants.RANK_MASKS[sq], sq) |
                     BitHelper.hyperbolaQuintessence(occ, Constants.FILE_MASKS[sq], sq);
 
-            mob += Long.bitCount((diag | ortho) & ~own);
+            m += BitHelper.popcount((diag | ortho) & ~myOcc);
         }
-        return mob;
+        return m;
     }
 
+    // =========================================================
+    // Center Control (attacks onto center squares)
+    // =========================================================
+    private static int centerControl(Board b) {
+        long wAtt = allAttacks(b, Constants.WHITE);
+        long blAtt = allAttacks(b, Constants.BLACK);
 
-    private static int knightOutposts(Board b) {
-        int score = 0;
+        int s = 0;
+        s += CENTER_CONTROL_BONUS * BitHelper.popcount(wAtt & CENTER_4);
+        s -= CENTER_CONTROL_BONUS * BitHelper.popcount(blAtt & CENTER_4);
 
-        long wPawnAtt = whitePawnAttacks(b.whitePawns);
-        long bPawnAtt = blackPawnAttacks(b.blackPawns);
+        s += EXT_CENTER_CONTROL_BONUS * BitHelper.popcount(wAtt & EXT_CENTER);
+        s -= EXT_CENTER_CONTROL_BONUS * BitHelper.popcount(blAtt & EXT_CENTER);
 
-        long wOutRanks = Constants.RANK_MASKS[4] | Constants.RANK_MASKS[5];
-        long wKn = b.whiteKnights & wOutRanks;
-        while (wKn != 0) {
-            int sq = Long.numberOfTrailingZeros(wKn);
-            wKn &= wKn - 1;
-
-            long sqBB = 1L << sq;
-            if ((sqBB & bPawnAtt) != 0) continue;
-            int bonus = 20;
-            if ((sqBB & wPawnAtt) != 0) bonus += 10;
-            score += bonus;
-        }
-
-        long bOutRanks = Constants.RANK_MASKS[2] | Constants.RANK_MASKS[3];
-        long bKn = b.blackKnights & bOutRanks;
-        while (bKn != 0) {
-            int sq = Long.numberOfTrailingZeros(bKn);
-            bKn &= bKn - 1;
-
-            long sqBB = 1L << sq;
-            if ((sqBB & wPawnAtt) != 0) continue;
-            int bonus = 20;
-            if ((sqBB & bPawnAtt) != 0) bonus += 10;
-            score -= bonus;
-        }
-
-        return score;
+        return s;
     }
 
+    // =========================================================
+    // Connectivity (pieces defended by own side)
+    // =========================================================
+    private static int connectivity(Board b) {
+        long wAtt = allAttacks(b, Constants.WHITE);
+        long blAtt = allAttacks(b, Constants.BLACK);
 
-    private static int kingSafety(Board b, int phase) {
-        int score = 0;
+        long wPieces = (b.whiteKnights | b.whiteBishops | b.whiteRooks | b.whiteQueens);
+        long blPieces = (b.blackKnights | b.blackBishops | b.blackRooks | b.blackQueens);
 
-        int mgW = phase; // 0..24
-
-        score += pawnShieldScore(b, Constants.WHITE) * mgW / PHASE_MAX;
-        score -= pawnShieldScore(b, Constants.BLACK) * mgW / PHASE_MAX;
-
-        int wKingSq = b.whiteKingSq;
-        int bKingSq = b.blackKingSq;
-
-        if (wKingSq >= 0 && wKingSq < 64) {
-            long ring = Constants.KING_MASKS[wKingSq];
-            long blackAtt = attacksAll(b, Constants.BLACK);
-            int hits = Long.bitCount(blackAtt & ring);
-            score -= (hits * 18) * mgW / PHASE_MAX;
-        }
-        if (bKingSq >= 0 && bKingSq < 64) {
-            long ring = Constants.KING_MASKS[bKingSq];
-            long whiteAtt = attacksAll(b, Constants.WHITE);
-            int hits = Long.bitCount(whiteAtt & ring);
-            score += (hits * 18) * mgW / PHASE_MAX;
-        }
-
-        return score;
+        int s = 0;
+        s += CONNECTIVITY_BONUS_PER_DEFENDED_PIECE * BitHelper.popcount(wPieces & wAtt);
+        s -= CONNECTIVITY_BONUS_PER_DEFENDED_PIECE * BitHelper.popcount(blPieces & blAtt);
+        return s;
     }
 
-    private static int pawnShieldScore(Board b, int side) {
-        int kingSq = (side == Constants.WHITE) ? b.whiteKingSq : b.blackKingSq;
-        if (kingSq < 0 || kingSq >= 64) return 0;
+    // =========================================================
+    // Trapped pieces (crude heuristic: very low mobility AND attacked)
+    // =========================================================
+    private static int trappedPieces(Board b) {
+        int s = 0;
 
-        long pawns = (side == Constants.WHITE) ? b.whitePawns : b.blackPawns;
-
-        int rank = kingSq >>> 3;
-        int file = kingSq & 7;
-
-        int holes = 0;
-        int frontRank = (side == Constants.WHITE) ? (rank + 1) : (rank - 1);
-
-        if (frontRank < 0 || frontRank > 7) return 0;
-
-        int base = frontRank << 3;
-        for (int df = -1; df <= 1; df++) {
-            int f = file + df;
-            if (f < 0 || f > 7) continue;
-            int sq = base + f;
-            if (((pawns >>> sq) & 1L) == 0) holes++;
-        }
-
-        return 30 - holes * 20;
-    }
-
-
-    private static int hangingPieces(Board b, int phase) {
-        int score = 0;
-        int mgW = phase;
-
-        long whiteAtt = attacksAll(b, Constants.WHITE);
-        long blackAtt = attacksAll(b, Constants.BLACK);
-
-        long whiteDef = whiteAtt;
-        long blackDef = blackAtt;
-
-        long wPiecesNoKing = b.whitePieces & ~b.whiteKing;
-        long bPiecesNoKing = b.blackPieces & ~b.blackKing;
-
-        long wHanging = wPiecesNoKing & blackAtt & ~whiteDef;
-        long bHanging = bPiecesNoKing & whiteAtt & ~blackDef;
-
-        int wCount = Long.bitCount(wHanging);
-        int bCount = Long.bitCount(bHanging);
-
-        score -= (wCount * 22) * mgW / PHASE_MAX;
-        score += (bCount * 22) * mgW / PHASE_MAX;
-
-        return score;
-    }
-
-
-    private static long attacksAll(Board b, int side) {
+        long wOcc = b.whitePawns | b.whiteKnights | b.whiteBishops | b.whiteRooks | b.whiteQueens | b.whiteKing;
+        long bOcc = b.blackPawns | b.blackKnights | b.blackBishops | b.blackRooks | b.blackQueens | b.blackKing;
         long occ = b.allPieces;
-        long attacks = 0L;
 
-        if (side == Constants.WHITE) {
-            attacks |= whitePawnAttacks(b.whitePawns);
-            attacks |= knightAttackSet(b.whiteKnights);
-            attacks |= kingAttackSet(b.whiteKing);
-            attacks |= bishopAttackSet(b.whiteBishops, occ);
-            attacks |= rookAttackSet(b.whiteRooks, occ);
-            attacks |= queenAttackSet(b.whiteQueens, occ);
-        } else {
-            attacks |= blackPawnAttacks(b.blackPawns);
-            attacks |= knightAttackSet(b.blackKnights);
-            attacks |= kingAttackSet(b.blackKing);
-            attacks |= bishopAttackSet(b.blackBishops, occ);
-            attacks |= rookAttackSet(b.blackRooks, occ);
-            attacks |= queenAttackSet(b.blackQueens, occ);
+        long wEnemyAtt = allAttacks(b, Constants.BLACK);
+        long bEnemyAtt = allAttacks(b, Constants.WHITE);
+
+        // White trapped minors
+        s -= trappedMinorPenalty(b.whiteKnights, wOcc, occ, wEnemyAtt, true);
+        s -= trappedMinorPenalty(b.whiteBishops, wOcc, occ, wEnemyAtt, false);
+
+        // Black trapped minors (subtracting black is equivalent to adding to white, so flip sign)
+        s += trappedMinorPenalty(b.blackKnights, bOcc, occ, bEnemyAtt, true);
+        s += trappedMinorPenalty(b.blackBishops, bOcc, occ, bEnemyAtt, false);
+
+        return s;
+    }
+
+    private static int trappedMinorPenalty(long minors, long myOcc, long occ, long enemyAttacks, boolean knight) {
+        int p = 0;
+        long bb = minors;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+
+            long moves;
+            if (knight) {
+                moves = Constants.KNIGHT_MASKS[sq] & ~myOcc;
+            } else {
+                moves =
+                    (BitHelper.hyperbolaQuintessence(occ, Constants.DIAG_MASKS[sq], sq) |
+                        BitHelper.hyperbolaQuintessence(occ, Constants.ANTIDIAG_MASKS[sq], sq))
+                        & ~myOcc;
+            }
+
+            int mob = BitHelper.popcount(moves);
+            boolean attacked = (enemyAttacks & sqBB(sq)) != 0;
+
+            if (attacked && mob <= 1) p += TRAPPED_PIECE_PENALTY;
         }
-
-        return attacks;
+        return p;
     }
 
-    private static long whitePawnAttacks(long pawns) {
-        long a = 0L;
-        a |= (pawns << 7) & Constants.notHFile;
-        a |= (pawns << 9) & Constants.notAFile;
-        return a;
+    // =========================================================
+    // King Safety (pawn shield + enemy attacks in king zone)
+    // =========================================================
+    private static int kingSafety(Board b, boolean midgame) {
+        // In endgame, king safety matters less; you can reduce weight by tapering (done by caller).
+        int s = 0;
+
+        int wKingSq = BitHelper.lsb(b.whiteKing);
+        int bKingSq = BitHelper.lsb(b.blackKing);
+
+        long wZone = kingZone(wKingSq);
+        long bZone = kingZone(bKingSq);
+
+        // Pawn shields (white: pawns on 2nd/3rd rank in front of king; black symmetrical)
+        s += pawnShieldBonus(b.whitePawns, wKingSq, true);
+        s -= pawnShieldBonus(b.blackPawns, bKingSq, false);
+
+        // Enemy attacks in king zone
+        long wEnemyAtt = allAttacks(b, Constants.BLACK);
+        long bEnemyAtt = allAttacks(b, Constants.WHITE);
+
+        int attacksOnWhite = BitHelper.popcount(wEnemyAtt & wZone);
+        int attacksOnBlack = BitHelper.popcount(bEnemyAtt & bZone);
+
+        // Scale more in midgame; caller tapers, but we can also slightly scale here
+        int scale = midgame ? 1 : 0; // keep it simple; taper already handles it
+        s -= (KING_DANGER_ATTACK * attacksOnWhite) * (midgame ? 1 : 0);
+        s += (KING_DANGER_ATTACK * attacksOnBlack) * (midgame ? 1 : 0);
+
+        return s;
     }
 
-    private static long blackPawnAttacks(long pawns) {
-        long a = 0L;
-        a |= (pawns >>> 7) & Constants.notAFile;
-        a |= (pawns >>> 9) & Constants.notHFile;
-        return a;
+    private static int pawnShieldBonus(long pawns, int kingSq, boolean white) {
+        // Basic: count pawns on the three files around king, one and two ranks in front
+        int file = kingSq & 7;
+        long files = Constants.FILE_MASKS[file];
+        if (file > 0) files |= Constants.FILE_MASKS[file - 1];
+        if (file < 7) files |= Constants.FILE_MASKS[file + 1];
+
+        long front1 = white ? (sqBB(kingSq) << 8) : (sqBB(kingSq) >>> 8);
+        long front2 = white ? (sqBB(kingSq) << 16) : (sqBB(kingSq) >>> 16);
+
+        long shieldSquares = (front1 | front2) & files;
+        int cnt = BitHelper.popcount(pawns & shieldSquares);
+        return cnt * KING_SAFETY_PAWN_SHIELD;
     }
 
-    private static long knightAttackSet(long knights) {
-        long att = 0L;
-        while (knights != 0) {
-            int sq = Long.numberOfTrailingZeros(knights);
-            knights &= knights - 1;
+    // =========================================================
+    // Space (controlled squares on enemy half, excluding pawn-only)
+    // =========================================================
+    private static int space(Board b) {
+        long wAtt = allAttacks(b, Constants.WHITE);
+        long blAtt = allAttacks(b, Constants.BLACK);
+
+        long whiteHalfEnemy = Constants.RANK_5 | Constants.RANK_6 | Constants.RANK_7 | Constants.RANK_8;
+        long blackHalfEnemy = Constants.RANK_1 | Constants.RANK_2 | Constants.RANK_3 | Constants.RANK_4;
+
+        int s = 0;
+        s += SPACE_BONUS_PER_SQ * BitHelper.popcount(wAtt & whiteHalfEnemy);
+        s -= SPACE_BONUS_PER_SQ * BitHelper.popcount(blAtt & blackHalfEnemy);
+
+        return s;
+    }
+
+    // =========================================================
+    // Attacks for a side (used by center/king safety/connectivity)
+    // =========================================================
+    private static long allAttacks(Board b, int side) {
+        long occ = b.allPieces;
+
+        long pawns   = (side == Constants.WHITE) ? b.whitePawns   : b.blackPawns;
+        long knights = (side == Constants.WHITE) ? b.whiteKnights : b.blackKnights;
+        long bishops = (side == Constants.WHITE) ? b.whiteBishops : b.blackBishops;
+        long rooks   = (side == Constants.WHITE) ? b.whiteRooks   : b.blackRooks;
+        long queens  = (side == Constants.WHITE) ? b.whiteQueens  : b.blackQueens;
+        long king    = (side == Constants.WHITE) ? b.whiteKing    : b.blackKing;
+
+        long att = 0;
+
+        // pawns
+        att |= BitHelper.attacks(side, pawns);
+
+        // knights
+        long bb = knights;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
             att |= Constants.KNIGHT_MASKS[sq];
         }
-        return att;
-    }
 
-    private static long kingAttackSet(long king) {
-        if (king == 0) return 0L;
-        int sq = Long.numberOfTrailingZeros(king);
-        return Constants.KING_MASKS[sq];
-    }
-
-    private static long bishopAttackSet(long bishops, long occ) {
-        long att = 0L;
-        while (bishops != 0) {
-            int sq = Long.numberOfTrailingZeros(bishops);
-            bishops &= bishops - 1;
+        // bishops
+        bb = bishops;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
             att |= BitHelper.hyperbolaQuintessence(occ, Constants.DIAG_MASKS[sq], sq);
             att |= BitHelper.hyperbolaQuintessence(occ, Constants.ANTIDIAG_MASKS[sq], sq);
         }
-        return att;
-    }
 
-    private static long rookAttackSet(long rooks, long occ) {
-        long att = 0L;
-        while (rooks != 0) {
-            int sq = Long.numberOfTrailingZeros(rooks);
-            rooks &= rooks - 1;
+        // rooks
+        bb = rooks;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
             att |= BitHelper.hyperbolaQuintessence(occ, Constants.RANK_MASKS[sq], sq);
             att |= BitHelper.hyperbolaQuintessence(occ, Constants.FILE_MASKS[sq], sq);
         }
-        return att;
-    }
 
-    private static long queenAttackSet(long queens, long occ) {
-        long att = 0L;
-        while (queens != 0) {
-            int sq = Long.numberOfTrailingZeros(queens);
-            queens &= queens - 1;
+        // queens
+        bb = queens;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+
+            att |= BitHelper.hyperbolaQuintessence(occ, Constants.RANK_MASKS[sq], sq);
+            att |= BitHelper.hyperbolaQuintessence(occ, Constants.FILE_MASKS[sq], sq);
             att |= BitHelper.hyperbolaQuintessence(occ, Constants.DIAG_MASKS[sq], sq);
             att |= BitHelper.hyperbolaQuintessence(occ, Constants.ANTIDIAG_MASKS[sq], sq);
-            att |= BitHelper.hyperbolaQuintessence(occ, Constants.RANK_MASKS[sq], sq);
-            att |= BitHelper.hyperbolaQuintessence(occ, Constants.FILE_MASKS[sq], sq);
         }
+
+        // king
+        if (king != 0) {
+            int sq = Long.numberOfTrailingZeros(king);
+            att |= Constants.KING_MASKS[sq];
+        }
+
         return att;
     }
+
+    // =========================================================
+    // Game phase & tapered blend
+    // =========================================================
+    private static int gamePhase(Board b) {
+        int phase = 0;
+
+        phase += PHASE_N * (BitHelper.popcount(b.whiteKnights) + BitHelper.popcount(b.blackKnights));
+        phase += PHASE_B * (BitHelper.popcount(b.whiteBishops) + BitHelper.popcount(b.blackBishops));
+        phase += PHASE_R * (BitHelper.popcount(b.whiteRooks)   + BitHelper.popcount(b.blackRooks));
+        phase += PHASE_Q * (BitHelper.popcount(b.whiteQueens)  + BitHelper.popcount(b.blackQueens));
+
+        if (phase > PHASE_MAX) phase = PHASE_MAX;
+        return phase; // 0..PHASE_MAX (0=endgame, max=midgame-ish)
+    }
+
+    private static int taper(int mg, int eg, int phase) {
+        // phase closer to PHASE_MAX => more midgame weight
+        return (mg * phase + eg * (PHASE_MAX - phase)) / PHASE_MAX;
+    }
+
+    // =========================================================
+    // Small helpers
+    // =========================================================
+    private static long sqBB(int sq) { return 1L << sq; }
+
+    private static int mirrorVertical(int sq) {
+        // flips rank: A1(0)->A8(56), etc. Works with your A1=0 indexing.
+        return sq ^ 56;
+    }
+
+    private static long northFill(long bb) {
+        bb |= bb << 8;
+        bb |= bb << 16;
+        bb |= bb << 32;
+        return bb;
+    }
+
+    private static long southFill(long bb) {
+        bb |= bb >>> 8;
+        bb |= bb >>> 16;
+        bb |= bb >>> 32;
+        return bb;
+    }
+
+    private static long kingZone(int kingSq) {
+        // King square + its neighbors + one more ring in front (simple "danger zone")
+        long zone = Constants.KING_MASKS[kingSq] | sqBB(kingSq);
+
+        // Expand one step (king moves from all zone squares)
+        long bb = zone;
+        long expanded = 0;
+        while (bb != 0) {
+            int sq = Long.numberOfTrailingZeros(bb);
+            bb &= bb - 1;
+            expanded |= Constants.KING_MASKS[sq];
+        }
+        return zone | expanded;
+    }
+
+    private static long squaresBetweenOnRank(int a, int b) {
+        if ((a >>> 3) != (b >>> 3)) return 0;
+        int min = Math.min(a, b);
+        int max = Math.max(a, b);
+        long mask = 0;
+        for (int sq = min + 1; sq < max; sq++) mask |= sqBB(sq);
+        return mask;
+    }
+
+    // =========================================================
+    // PST tables (these are starter values; tune freely)
+    // Indexing is from WHITE perspective (A1=0..H8=63).
+    // Black uses mirrorVertical().
+    // =========================================================
+
+    private static final int[] PST_P_MG = {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        10, 12, 12, -2, -2, 12, 12, 10,
+        6,  8, 10, 14, 14, 10,  8,  6,
+        4,  6,  8, 16, 16,  8,  6,  4,
+        2,  4,  6, 12, 12,  6,  4,  2,
+        0,  2,  2,  6,  6,  2,  2,  0,
+        0,  0,  0, -8, -8,  0,  0,  0,
+        0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    private static final int[] PST_P_EG = {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        12, 14, 14,  6,  6, 14, 14, 12,
+        10, 12, 12, 10, 10, 12, 12, 10,
+        8, 10, 10, 12, 12, 10, 10,  8,
+        6,  8,  8, 10, 10,  8,  8,  6,
+        4,  6,  6,  8,  8,  6,  6,  4,
+        2,  4,  4,  6,  6,  4,  4,  2,
+        0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    private static final int[] PST_N_MG = {
+        -40,-30,-20,-20,-20,-20,-30,-40,
+        -30,-10,  0,  4,  4,  0,-10,-30,
+        -20,  4, 10, 12, 12, 10,  4,-20,
+        -20,  6, 12, 16, 16, 12,  6,-20,
+        -20,  6, 12, 16, 16, 12,  6,-20,
+        -20,  4, 10, 12, 12, 10,  4,-20,
+        -30,-10,  0,  2,  2,  0,-10,-30,
+        -40,-30,-20,-20,-20,-20,-30,-40
+    };
+
+    private static final int[] PST_N_EG = {
+        -30,-20,-10,-10,-10,-10,-20,-30,
+        -20, -5,  0,  2,  2,  0, -5,-20,
+        -10,  2,  8, 10, 10,  8,  2,-10,
+        -10,  4, 10, 12, 12, 10,  4,-10,
+        -10,  4, 10, 12, 12, 10,  4,-10,
+        -10,  2,  8, 10, 10,  8,  2,-10,
+        -20, -5,  0,  2,  2,  0, -5,-20,
+        -30,-20,-10,-10,-10,-10,-20,-30
+    };
+
+    private static final int[] PST_B_MG = {
+        -20,-10,-10,-10,-10,-10,-10,-20,
+        -10,  2,  0,  2,  2,  0,  2,-10,
+        -10,  6,  8, 10, 10,  8,  6,-10,
+        -10,  8, 10, 12, 12, 10,  8,-10,
+        -10,  8, 10, 12, 12, 10,  8,-10,
+        -10,  6,  8, 10, 10,  8,  6,-10,
+        -10,  2,  0,  2,  2,  0,  2,-10,
+        -20,-10,-10,-10,-10,-10,-10,-20
+    };
+
+    private static final int[] PST_B_EG = {
+        -10, -5, -5, -5, -5, -5, -5,-10,
+        -5,  2,  2,  2,  2,  2,  2, -5,
+        -5,  4,  6,  6,  6,  6,  4, -5,
+        -5,  4,  6,  8,  8,  6,  4, -5,
+        -5,  4,  6,  8,  8,  6,  4, -5,
+        -5,  4,  6,  6,  6,  6,  4, -5,
+        -5,  2,  2,  2,  2,  2,  2, -5,
+        -10, -5, -5, -5, -5, -5, -5,-10
+    };
+
+    private static final int[] PST_R_MG = {
+        0,  0,  2,  4,  4,  2,  0,  0,
+        -2,  0,  0,  2,  2,  0,  0, -2,
+        -2,  0,  0,  2,  2,  0,  0, -2,
+        -2,  0,  0,  2,  2,  0,  0, -2,
+        -2,  0,  0,  2,  2,  0,  0, -2,
+        -2,  0,  0,  2,  2,  0,  0, -2,
+        4,  6,  6,  8,  8,  6,  6,  4,
+        0,  0,  2,  4,  4,  2,  0,  0
+    };
+
+    private static final int[] PST_R_EG = {
+        0,  0,  2,  4,  4,  2,  0,  0,
+        0,  2,  2,  4,  4,  2,  2,  0,
+        0,  2,  2,  4,  4,  2,  2,  0,
+        0,  2,  2,  4,  4,  2,  2,  0,
+        0,  2,  2,  4,  4,  2,  2,  0,
+        0,  2,  2,  4,  4,  2,  2,  0,
+        2,  4,  4,  6,  6,  4,  4,  2,
+        0,  0,  2,  4,  4,  2,  0,  0
+    };
+
+    private static final int[] PST_Q_MG = {
+        -10, -5, -5, -2, -2, -5, -5,-10,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  2,  2,  2,  2,  0, -5,
+        -2,  0,  2,  4,  4,  2,  0, -2,
+        -2,  0,  2,  4,  4,  2,  0, -2,
+        -5,  0,  2,  2,  2,  2,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -10, -5, -5, -2, -2, -5, -5,-10
+    };
+
+    private static final int[] PST_Q_EG = {
+        -5, -2, -2, -2, -2, -2, -2, -5,
+        -2,  0,  0,  0,  0,  0,  0, -2,
+        -2,  0,  2,  2,  2,  2,  0, -2,
+        -2,  0,  2,  4,  4,  2,  0, -2,
+        -2,  0,  2,  4,  4,  2,  0, -2,
+        -2,  0,  2,  2,  2,  2,  0, -2,
+        -2,  0,  0,  0,  0,  0,  0, -2,
+        -5, -2, -2, -2, -2, -2, -2, -5
+    };
+
+    private static final int[] PST_K_MG = {
+        20, 30, 10,  0,  0, 10, 30, 20,
+        20, 20,  0,  0,  0,  0, 20, 20,
+        -10,-20,-20,-20,-20,-20,-20,-10,
+        -20,-30,-30,-40,-40,-30,-30,-20,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30
+    };
+
+    private static final int[] PST_K_EG = {
+        -30,-20,-10, -5, -5,-10,-20,-30,
+        -20,-10,  0,  0,  0,  0,-10,-20,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -5,  0, 10, 15, 15, 10,  0, -5,
+        -5,  0, 10, 15, 15, 10,  0, -5,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -20,-10,  0,  0,  0,  0,-10,-20,
+        -30,-20,-10, -5, -5,-10,-20,-30
+    };
 }

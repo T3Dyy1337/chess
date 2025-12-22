@@ -18,7 +18,7 @@ public class Main {
         //testSearch(b,search,12);
 
         //System.out.println(Perft.perft(b,6));
-        ConsoleGame.play(false,"8/6p1/3b2B1/p6P/2pk2P1/2p5/P1K5/8 w - - 1 47");
+        ConsoleGame.play(true,null);
     }
 
 
