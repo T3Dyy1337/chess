@@ -19,7 +19,6 @@ public class Board {
 
     public long zobristKey;
 
-    // ✅ NEW: cached king squares
     public int whiteKingSq = -1;
     public int blackKingSq = -1;
 
@@ -29,9 +28,11 @@ public class Board {
 
     public Board() {
         clear();
+        for (int i = 0; i < undoStack.length; i++) undoStack[i] = new Undo();
     }
 
-    private void clear() {
+
+    public void clear() {
         whitePawns = whiteKnights = whiteBishops = whiteRooks = whiteQueens = whiteKing = 0L;
         blackPawns = blackKnights = blackBishops = blackRooks = blackQueens = blackKing = 0L;
         whitePieces = blackPieces = allPieces = 0L;
@@ -75,7 +76,7 @@ public class Board {
                 case 'Q' -> { whiteQueens |= bit; pieceAt[sq] = Constants.W_QUEEN; }
                 case 'K' -> {
                     whiteKing |= bit;
-                    whiteKingSq = sq;          // ✅ NEW
+                    whiteKingSq = sq;
                     pieceAt[sq] = Constants.W_KING;
                 }
 
@@ -86,7 +87,7 @@ public class Board {
                 case 'q' -> { blackQueens |= bit; pieceAt[sq] = Constants.B_QUEEN; }
                 case 'k' -> {
                     blackKing |= bit;
-                    blackKingSq = sq;          // ✅ NEW
+                    blackKingSq = sq;
                     pieceAt[sq] = Constants.B_KING;
                 }
             }
@@ -113,7 +114,6 @@ public class Board {
         zobristKey = Zobrist.hash(this);
     }
 
-    // ✅ FAST check test (no lsb!)
     public boolean isInCheck() {
         int kingSq = (sideToMove == Constants.WHITE) ? whiteKingSq : blackKingSq;
         int attacker = sideToMove ^ 1;
@@ -125,8 +125,9 @@ public class Board {
     }
 
     private static boolean isWhitePiece(int piece) {
-        return piece <= Constants.W_KING;
+        return (piece & 1) == 0;
     }
+
 
     private void removePieceNoHash(int piece, int sq) {
         long bb = 1L << sq;
@@ -214,40 +215,41 @@ public class Board {
             throw new IllegalStateException("Undo stack overflow (depth too large).");
         }
 
-        int from  = Move.from(move);
-        int to    = Move.to(move);
-        int flag  = Move.flags(move);
-        int promo = Move.promo(move);
+        final int from  = Move.from(move);
+        final int to    = Move.to(move);
+        final int flag  = Move.flags(move);
+        final int promo = Move.promo(move);
 
-        int us = sideToMove;
+        final int us = sideToMove;
 
-        Undo u = new Undo();
+        final int movingPiece = pieceAt[from];
+        if (movingPiece == -1) {
+            throw new IllegalStateException("No piece on from-square " + from +
+                ", to-square: " + to + ", flag :" + flag);
+        }
+
+        final Undo u = undoStack[undoTop++];
         u.move = move;
+        u.movingPiece = movingPiece;
         u.castlingRights = castlingRights;
         u.enPassantSquare = enPassantSquare;
         u.halfmoveClock = halfmoveClock;
         u.fullmoveNumber = fullmoveNumber;
         u.zobristKey = zobristKey;
 
-        int movingPiece = getPieceOn(from);
-        if (movingPiece == -1) {
-            throw new IllegalStateException("No piece on from-square " + from + ", to-square: " + to + ", flag :" + flag);
-        }
-        u.movingPiece = movingPiece;
-
-        // Determine captured piece (if any)
+        int capturedPiece = -1;
         if (flag == Constants.EN_PASSANT) {
-            u.capturedPiece = (us == Constants.WHITE) ? Constants.B_PAWN : Constants.W_PAWN;
-        } else if (flag == Constants.CAPTURE || flag >= Constants.PROMO_KNIGHT_CAPTURE) {
-            u.capturedPiece = getPieceOn(to);
-            if (u.capturedPiece == -1) {
-                throw new IllegalStateException("Capture flag but no victim on square " + to);
+            capturedPiece = (us == Constants.WHITE) ? Constants.B_PAWN : Constants.W_PAWN;
+        } else if (flag == Constants.CAPTURE ||
+            (flag >= Constants.PROMO_KNIGHT_CAPTURE && flag <= Constants.PROMO_QUEEN_CAPTURE)) {
+            capturedPiece = pieceAt[to];
+            if (capturedPiece == -1) {
+                throw new IllegalStateException("Capture flag but no victim on square " + to +
+                    " (from=" + from + ", flag=" + flag + ")");
             }
-        } else {
-            u.capturedPiece = -1;
         }
+        u.capturedPiece = capturedPiece;
 
-        undoStack[undoTop++] = u;
 
         if (enPassantSquare != -1) {
             zobristKey ^= Zobrist.ENPASSANT_KEYS[enPassantSquare];
@@ -256,43 +258,43 @@ public class Board {
 
         removePiece(movingPiece, from);
 
-        boolean isCapture = (u.capturedPiece != -1);
-
-        if (flag == Constants.CAPTURE || flag >= Constants.PROMO_KNIGHT_CAPTURE) {
-            removePiece(u.capturedPiece, to);
-        } else if (flag == Constants.EN_PASSANT) {
-            int capSq = (us == Constants.WHITE) ? to - 8 : to + 8;
-            removePiece(u.capturedPiece, capSq);
+        if (capturedPiece != -1) {
+            if (flag == Constants.EN_PASSANT) {
+                final int capSq = (us == Constants.WHITE) ? (to - 8) : (to + 8);
+                removePiece(capturedPiece, capSq);
+            } else {
+                removePiece(capturedPiece, to);
+            }
         }
 
-        if (flag >= Constants.PROMO_KNIGHT) {
+        final boolean isPromotion = (flag >= Constants.PROMO_KNIGHT);
+        if (isPromotion) {
             addPiece(promo, to);
-        } else if (flag == Constants.KING_CASTLE || flag == Constants.QUEEN_CASTLE) {
-            addPiece(movingPiece, to);
-
-            if (flag == Constants.KING_CASTLE) {
-                if (us == Constants.WHITE) {
-                    removePiece(Constants.W_ROOK, Constants.H1);
-                    addPiece(Constants.W_ROOK, Constants.F1);
-                } else {
-                    removePiece(Constants.B_ROOK, Constants.H8);
-                    addPiece(Constants.B_ROOK, Constants.F8);
-                }
-            } else {
-                if (us == Constants.WHITE) {
-                    removePiece(Constants.W_ROOK, Constants.A1);
-                    addPiece(Constants.W_ROOK, Constants.D1);
-                } else {
-                    removePiece(Constants.B_ROOK, Constants.A8);
-                    addPiece(Constants.B_ROOK, Constants.D8);
-                }
-            }
-        } else if (flag == Constants.DOUBLE_PAWN_PUSH) {
-            addPiece(movingPiece, to);
-            enPassantSquare = (us == Constants.WHITE) ? to - 8 : to + 8;
-            zobristKey ^= Zobrist.ENPASSANT_KEYS[enPassantSquare];
         } else {
             addPiece(movingPiece, to);
+        }
+
+        if (flag == Constants.KING_CASTLE) {
+            if (us == Constants.WHITE) {
+                removePiece(Constants.W_ROOK, Constants.H1);
+                addPiece(Constants.W_ROOK, Constants.F1);
+            } else {
+                removePiece(Constants.B_ROOK, Constants.H8);
+                addPiece(Constants.B_ROOK, Constants.F8);
+            }
+        } else if (flag == Constants.QUEEN_CASTLE) {
+            if (us == Constants.WHITE) {
+                removePiece(Constants.W_ROOK, Constants.A1);
+                addPiece(Constants.W_ROOK, Constants.D1);
+            } else {
+                removePiece(Constants.B_ROOK, Constants.A8);
+                addPiece(Constants.B_ROOK, Constants.D8);
+            }
+        }
+
+        if (flag == Constants.DOUBLE_PAWN_PUSH) {
+            enPassantSquare = (us == Constants.WHITE) ? (to - 8) : (to + 8);
+            zobristKey ^= Zobrist.ENPASSANT_KEYS[enPassantSquare];
         }
 
         zobristKey ^= Zobrist.CASTLING_KEYS[castlingRights];
@@ -302,106 +304,105 @@ public class Board {
         sideToMove ^= 1;
         zobristKey ^= Zobrist.SIDE_TO_MOVE_KEY;
 
-        boolean pawnMove = (movingPiece == Constants.W_PAWN || movingPiece == Constants.B_PAWN);
-        boolean promoMove = (flag >= Constants.PROMO_KNIGHT);
-
-        if (pawnMove || isCapture || promoMove) halfmoveClock = 0;
+        final boolean pawnMove = (movingPiece == Constants.W_PAWN || movingPiece == Constants.B_PAWN);
+        if (pawnMove || capturedPiece != -1 || isPromotion) halfmoveClock = 0;
         else halfmoveClock++;
 
         if (us == Constants.BLACK) fullmoveNumber++;
     }
 
     public void unmakeMove() {
-        Undo u = undoStack[--undoTop];
+        final Undo u = undoStack[--undoTop];
 
-        int move  = u.move;
-        int from  = Move.from(move);
-        int to    = Move.to(move);
-        int flag  = Move.flags(move);
-        int promo = Move.promo(move);
+        final int move = u.move;
+        final int from = Move.from(move);
+        final int to   = Move.to(move);
+        final int flag = Move.flags(move);
+        final int promo = Move.promo(move);
 
-        // Restore simple fields (we restore zobristKey at the END)
         castlingRights  = u.castlingRights;
         enPassantSquare = u.enPassantSquare;
         halfmoveClock   = u.halfmoveClock;
         fullmoveNumber  = u.fullmoveNumber;
 
-        // Switch side back
         sideToMove ^= 1;
-        int us = sideToMove;
+        final int us = sideToMove;
 
-        // Undo piece placement on 'to'
-        if (flag >= Constants.PROMO_KNIGHT) {
+        if (flag == Constants.KING_CASTLE) {
+            if (us == Constants.WHITE) {
+                removePieceNoHash(Constants.W_ROOK, Constants.F1);
+                addPieceNoHash(Constants.W_ROOK, Constants.H1);
+            } else {
+                removePieceNoHash(Constants.B_ROOK, Constants.F8);
+                addPieceNoHash(Constants.B_ROOK, Constants.H8);
+            }
+        } else if (flag == Constants.QUEEN_CASTLE) {
+            if (us == Constants.WHITE) {
+                removePieceNoHash(Constants.W_ROOK, Constants.D1);
+                addPieceNoHash(Constants.W_ROOK, Constants.A1);
+            } else {
+                removePieceNoHash(Constants.B_ROOK, Constants.D8);
+                addPieceNoHash(Constants.B_ROOK, Constants.A8);
+            }
+        }
+
+        final boolean isPromotion = (flag >= Constants.PROMO_KNIGHT);
+        if (isPromotion) {
             removePieceNoHash(promo, to);
         } else {
             removePieceNoHash(u.movingPiece, to);
         }
 
-        // Put mover back on 'from'
         addPieceNoHash(u.movingPiece, from);
 
-        // Restore captured piece
         if (u.capturedPiece != -1) {
             if (flag == Constants.EN_PASSANT) {
-                int capSq = (us == Constants.WHITE) ? to - 8 : to + 8;
+                final int capSq = (us == Constants.WHITE) ? (to - 8) : (to + 8);
                 addPieceNoHash(u.capturedPiece, capSq);
             } else {
                 addPieceNoHash(u.capturedPiece, to);
             }
         }
 
-        // Undo castling rook move
-        if (flag == Constants.KING_CASTLE || flag == Constants.QUEEN_CASTLE) {
-            if (flag == Constants.KING_CASTLE) {
-                if (us == Constants.WHITE) {
-                    removePieceNoHash(Constants.W_ROOK, Constants.F1);
-                    addPieceNoHash(Constants.W_ROOK, Constants.H1);
-                } else {
-                    removePieceNoHash(Constants.B_ROOK, Constants.F8);
-                    addPieceNoHash(Constants.B_ROOK, Constants.H8);
-                }
-            } else {
-                if (us == Constants.WHITE) {
-                    removePieceNoHash(Constants.W_ROOK, Constants.D1);
-                    addPieceNoHash(Constants.W_ROOK, Constants.A1);
-                } else {
-                    removePieceNoHash(Constants.B_ROOK, Constants.D8);
-                    addPieceNoHash(Constants.B_ROOK, Constants.A8);
-                }
+        zobristKey = u.zobristKey;
+    }
+
+    public void print() {
+        System.out.println();
+        for (int rank = 7; rank >= 0; rank--) {
+            System.out.print((rank + 1) + "  ");
+            for (int file = 0; file < 8; file++) {
+                int sq = rank * 8 + file;
+                int piece = getPieceOn(sq);
+                System.out.print(pieceChar(piece) + " ");
             }
+            System.out.println();
         }
-
-        zobristKey = u.zobristKey;
+        System.out.println();
+        System.out.println("   a b c d e f g h");
+        System.out.println();
     }
 
-    public void makeNullMove() {
-        Undo u = new Undo();
-        u.move = 0;
-        u.castlingRights = castlingRights;
-        u.enPassantSquare = enPassantSquare;
-        u.halfmoveClock = halfmoveClock;
-        u.fullmoveNumber = fullmoveNumber;
-        u.zobristKey = zobristKey;
-        undoStack[undoTop++] = u;
+    private char pieceChar(int piece) {
+        return switch (piece) {
+            case Constants.W_PAWN   -> 'P';
+            case Constants.W_KNIGHT -> 'N';
+            case Constants.W_BISHOP -> 'B';
+            case Constants.W_ROOK   -> 'R';
+            case Constants.W_QUEEN  -> 'Q';
+            case Constants.W_KING   -> 'K';
 
-        if (enPassantSquare != -1) {
-            zobristKey ^= Zobrist.ENPASSANT_KEYS[enPassantSquare];
-            enPassantSquare = -1;
-        }
+            case Constants.B_PAWN   -> 'p';
+            case Constants.B_KNIGHT -> 'n';
+            case Constants.B_BISHOP -> 'b';
+            case Constants.B_ROOK   -> 'r';
+            case Constants.B_QUEEN  -> 'q';
+            case Constants.B_KING   -> 'k';
 
-        sideToMove ^= 1;
-        zobristKey ^= Zobrist.SIDE_TO_MOVE_KEY;
+            default -> '.';
+        };
     }
 
-    public void unmakeNullMove() {
-        Undo u = undoStack[--undoTop];
-        castlingRights = u.castlingRights;
-        enPassantSquare = u.enPassantSquare;
-        halfmoveClock = u.halfmoveClock;
-        fullmoveNumber = u.fullmoveNumber;
-        zobristKey = u.zobristKey;
-        sideToMove ^= 1;
-    }
 
 }
 

@@ -26,7 +26,7 @@ public class TranspositionTable {
 
     private int[] ages;
 
-    private int currentGeneration = 1;
+    private volatile int currentGeneration = 1;
 
     private int numBuckets;
 
@@ -73,6 +73,11 @@ public class TranspositionTable {
 
     }
 
+    public void clear() {
+        increaseGeneration();
+    }
+
+
 
     private int largestPowerOfTwo(int num) {
         int p = 1;
@@ -106,30 +111,26 @@ public class TranspositionTable {
 
 
         for (int i = entryIndex; i < entryIndex + BUCKET_SIZE; i++) {
-            if(hashes[i] == hash){
-                if(depth >= depths[i]){
-                    depths[i] = depth;
-                    flags[i] = flag;
-                    scores[i] = score;
-                    bestMoves[i] = bestMove;
-                    ages[i] = currentGeneration;
-
-                    if (i != entryIndex && depths[i] > depths[entryIndex]){
-                        swap(entryIndex,i);
-                    }
-                }
-                return;
-            }
-        }
-
-        for (int i = entryIndex; i < entryIndex + BUCKET_SIZE; i++) {
             if (hashes[i] == 0) {
-                hashes[i] = hash;
                 depths[i] = depth;
                 flags[i] = flag;
                 scores[i] = score;
                 bestMoves[i] = bestMove;
                 ages[i] = currentGeneration;
+                hashes[i] = hash;
+                return;
+            }
+        }
+
+
+        for (int i = entryIndex; i < entryIndex + BUCKET_SIZE; i++) {
+            if (hashes[i] == 0) {
+                depths[i] = depth;
+                flags[i] = flag;
+                scores[i] = score;
+                bestMoves[i] = bestMove;
+                ages[i] = currentGeneration;
+                hashes[i] = hash;
 
                 if (i != entryIndex && depths[i] > depths[entryIndex]) {
                     swap(entryIndex, i);
@@ -139,12 +140,12 @@ public class TranspositionTable {
         }
 
         if (depth > depths[entryIndex]) {
-            hashes[entryIndex] = hash;
             depths[entryIndex] = depth;
             flags[entryIndex] = flag;
             scores[entryIndex] = score;
             bestMoves[entryIndex] = bestMove;
             ages[entryIndex] = currentGeneration;
+            hashes[entryIndex] = hash;
             return;
         }
 
@@ -158,12 +159,12 @@ public class TranspositionTable {
             }
         }
 
-        hashes[victim] = hash;
         depths[victim] = depth;
         flags[victim] = flag;
         scores[victim] = score;
         bestMoves[victim] = bestMove;
         ages[victim] = currentGeneration;
+        hashes[victim] = hash;
     }
 
     public ProbeResult probe(long hash, int depth, int alpha, int beta, int ply) {

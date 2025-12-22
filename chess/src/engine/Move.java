@@ -38,6 +38,10 @@ public final class Move {
         return (move >>> 16) & FLAG_MASK;
     }
 
+    public static boolean isCapture(int move){
+        return flags(move) == 1 || flags(move) <= 12;
+    }
+
     private static String squareToString(int sq) {
         char file = (char) ('a' + (sq & 7));
         char rank = (char) ('1' + (sq >>> 3));
@@ -71,4 +75,106 @@ public final class Move {
             default -> '?';
         };
     }
+
+    private static int squareFromUCI(char file, char rank) {
+        return (rank - '1') * 8 + (file - 'a');
+    }
+
+    public static int fromUCI(Board board, String uci) {
+        if (uci.length() < 4) return 0;
+
+        int from = (uci.charAt(1) - '1') * 8 + (uci.charAt(0) - 'a');
+        int to   = (uci.charAt(3) - '1') * 8 + (uci.charAt(2) - 'a');
+
+        int piece = board.getPieceOn(from);
+        if (piece == -1) {
+            throw new IllegalStateException("No piece on from-square: " + uci);
+        }
+
+        int flags = Constants.QUIET;
+        int promo = 0;
+
+        boolean isCapture = board.getPieceOn(to) != -1;
+
+        // =====================
+        // Promotion
+        // =====================
+        if (uci.length() == 5) {
+            char pc = uci.charAt(4);
+            boolean white = (piece & 1) == 0;
+
+            switch (pc) {
+                case 'q' -> promo = white ? Constants.W_QUEEN  : Constants.B_QUEEN;
+                case 'r' -> promo = white ? Constants.W_ROOK   : Constants.B_ROOK;
+                case 'b' -> promo = white ? Constants.W_BISHOP : Constants.B_BISHOP;
+                case 'n' -> promo = white ? Constants.W_KNIGHT : Constants.B_KNIGHT;
+                default  -> throw new IllegalArgumentException("Bad promotion: " + uci);
+            }
+
+            if (isCapture) {
+                flags = switch (promo) {
+                    case Constants.W_QUEEN,  Constants.B_QUEEN  -> Constants.PROMO_QUEEN_CAPTURE;
+                    case Constants.W_ROOK,   Constants.B_ROOK   -> Constants.PROMO_ROOK_CAPTURE;
+                    case Constants.W_BISHOP, Constants.B_BISHOP -> Constants.PROMO_BISHOP_CAPTURE;
+                    case Constants.W_KNIGHT, Constants.B_KNIGHT -> Constants.PROMO_KNIGHT_CAPTURE;
+                    default -> throw new IllegalStateException();
+                };
+            } else {
+                flags = switch (promo) {
+                    case Constants.W_QUEEN,  Constants.B_QUEEN  -> Constants.PROMO_QUEEN;
+                    case Constants.W_ROOK,   Constants.B_ROOK   -> Constants.PROMO_ROOK;
+                    case Constants.W_BISHOP, Constants.B_BISHOP -> Constants.PROMO_BISHOP;
+                    case Constants.W_KNIGHT, Constants.B_KNIGHT -> Constants.PROMO_KNIGHT;
+                    default -> throw new IllegalStateException();
+                };
+            }
+
+            return Move.encode(from, to, promo, flags);
+        }
+
+        // =====================
+        // Castling
+        // =====================
+        if (piece == Constants.W_KING) {
+            if (from == Constants.E1 && to == Constants.G1)
+                return Move.encode(from, to, 0, Constants.KING_CASTLE);
+            if (from == Constants.E1 && to == Constants.C1)
+                return Move.encode(from, to, 0, Constants.QUEEN_CASTLE);
+        }
+
+        if (piece == Constants.B_KING) {
+            if (from == Constants.E8 && to == Constants.G8)
+                return Move.encode(from, to, 0, Constants.KING_CASTLE);
+            if (from == Constants.E8 && to == Constants.C8)
+                return Move.encode(from, to, 0, Constants.QUEEN_CASTLE);
+        }
+
+        // =====================
+        // En passant
+        // =====================
+        if ((piece == Constants.W_PAWN || piece == Constants.B_PAWN)
+            && to == board.enPassantSquare) {
+            return Move.encode(from, to, 0, Constants.EN_PASSANT);
+        }
+
+        // =====================
+        // Capture
+        // =====================
+        if (isCapture) {
+            flags = Constants.CAPTURE;
+        }
+
+        // =====================
+        // Double pawn push
+        // =====================
+        if (piece == Constants.W_PAWN && from / 8 == 1 && to / 8 == 3)
+            flags = Constants.DOUBLE_PAWN_PUSH;
+
+        if (piece == Constants.B_PAWN && from / 8 == 6 && to / 8 == 4)
+            flags = Constants.DOUBLE_PAWN_PUSH;
+
+        return Move.encode(from, to, 0, flags);
+    }
+
+
 }

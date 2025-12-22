@@ -7,33 +7,18 @@ import util.WeightLoader;
 
 public class Main {
     public static void main(String[] args) {
-        Board b = new Board();
-        b.loadFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 ");
-        float[] input = NNInput.encode(b);
-        float[] weights = {};
-        try{
-            weights = WeightLoader.loadWeights("C:\\Users\\juric\\OneDrive\\Dokumenty\\chess\\chess\\files\\weights.bin");
-        }catch (Exception e){
-            e.printStackTrace();
-        }
-        NeuralEval nn = new NeuralEval(weights);
-        TranspositionTable tt = new TranspositionTable(256);
+        //Board b = new Board();
+        //String fen = "8/3p4/p2p3p/3N4/2P3rP/1P6/kBK5/4R3 w - - 0 37";
+        //b.loadFEN(fen);
 
+        //TranspositionTable tt = new TranspositionTable(256);
 
+        //Search search = new Search(tt);
 
+        //testSearch(b,search,12);
 
-//        Search search = new Search(nn,tt);
-//
-//
-//        testSearch(b,search,10);
-//
-//        for (int i = 0; i < search.pvLength[0]; i++) {
-//            System.out.print(Move.toUCI(search.pvMoves[0][i]) + " ");
-//        }
-//        System.out.println();
-
-        System.out.println(Perft.perft(b,5));
-
+        //System.out.println(Perft.perft(b,6));
+        ConsoleGame.play(false,"8/6p1/3b2B1/p6P/2pk2P1/2p5/P1K5/8 w - - 1 47");
     }
 
 
@@ -48,7 +33,16 @@ public class Main {
         double sec = (end - start) / 1000.0;
         System.out.println("NPS: " + (long)(search.nodesSearched / Math.max(0.001, sec)));
 
+        System.out.print("PV: ");
+        for (int i = 0; i < search.pvLength[0]; i++) {
+            int move = search.pvMoves[0][i];
+            System.out.print(Move.toUCI(move) + " ");
+        }
+        System.out.println();
+
+        }
+
     }
 
 
-}
+

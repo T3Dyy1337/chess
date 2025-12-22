@@ -12,349 +12,222 @@ public class MoveGenerator {
         return piece == Constants.W_KING || piece == Constants.B_KING;
     }
 
-    private static boolean isOppKingOn(Board board, int sq) {
-        int victim = board.getPieceOn(sq);
-        return isKing(victim);
-    }
 
 
     public static int generateAllMoves(Board board, int[] moves){
         int moveCount = 0;
         moveCount = generatePawnMoves(board, moves, moveCount);
-        moveCount = generateKingMoves(board,moves, moveCount);
         moveCount = generateKnightMoves(board,moves,moveCount);
         moveCount = generateBishopMoves(board,moves,moveCount);
         moveCount = generateRookMoves(board,moves,moveCount);
         moveCount = generateQueenMoves(board,moves,moveCount);
+        moveCount = generateKingMoves(board,moves, moveCount);
         return moveCount;
     }
 
 
-    public static int generatePawnMoves(Board board, int[] moves, int moveCount){
-        int ourColor = board.sideToMove;
-
-        long pawns = (ourColor == Constants.WHITE) ? board.whitePawns : board.blackPawns;
-        long own   = (ourColor == Constants.WHITE ? board.whitePieces : board.blackPieces);
-        long opp   = (ourColor == Constants.WHITE ? board.blackPieces : board.whitePieces);
+    public static int generatePawnMoves(Board board, int[] moves, int mc) {
+        int us = board.sideToMove;
+        long pawns = us == Constants.WHITE ? board.whitePawns : board.blackPawns;
+        long opp   = us == Constants.WHITE ? board.blackPieces : board.whitePieces;
         long empty = ~board.allPieces;
 
-        long singlePush = (ourColor == Constants.WHITE)
-                ? BitHelper.whiteSinglePush(pawns, empty)
-                : BitHelper.blackSinglePush(pawns, empty);
+        long promoRank = us == Constants.WHITE ? Constants.RANK_8 : Constants.RANK_1;
 
-        long promotionRank = (ourColor == Constants.WHITE) ? Constants.RANK_8 : Constants.RANK_1;
+        long singlePush = us == Constants.WHITE
+            ? BitHelper.whiteSinglePush(pawns, empty)
+            : BitHelper.blackSinglePush(pawns, empty);
 
-        long promotions      = singlePush & promotionRank;
-        long quietSinglePush = singlePush & ~promotionRank;
+        long promos = singlePush & promoRank;
+        long quiet  = singlePush & ~promoRank;
 
-        // ---- Promotions (quiet) ----
-        while (promotions != 0) {
-            int to = BitHelper.lsb(promotions);
-            long toMask = 1L << to;
-            int from = (ourColor == Constants.WHITE) ? to - 8 : to + 8;
+        // Promotions (quiet)
+        while (promos != 0) {
+            int to = BitHelper.lsb(promos);
+            promos &= promos - 1;
+            int from = us == Constants.WHITE ? to - 8 : to + 8;
 
-            moves[moveCount++] = Move.encode(from, to,
-                    (ourColor == Constants.WHITE) ? Constants.W_QUEEN : Constants.B_QUEEN,
-                    Constants.PROMO_QUEEN);
-            moves[moveCount++] = Move.encode(from, to,
-                    (ourColor == Constants.WHITE) ? Constants.W_ROOK : Constants.B_ROOK,
-                    Constants.PROMO_ROOK);
-            moves[moveCount++] = Move.encode(from, to,
-                    (ourColor == Constants.WHITE) ? Constants.W_BISHOP : Constants.B_BISHOP,
-                    Constants.PROMO_BISHOP);
-            moves[moveCount++] = Move.encode(from, to,
-                    (ourColor == Constants.WHITE) ? Constants.W_KNIGHT : Constants.B_KNIGHT,
-                    Constants.PROMO_KNIGHT);
-
-            promotions ^= toMask;
+            moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_QUEEN  : Constants.B_QUEEN,  Constants.PROMO_QUEEN);
+            moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_ROOK   : Constants.B_ROOK,   Constants.PROMO_ROOK);
+            moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_BISHOP : Constants.B_BISHOP, Constants.PROMO_BISHOP);
+            moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_KNIGHT : Constants.B_KNIGHT, Constants.PROMO_KNIGHT);
         }
 
-        // ---- Quiet single pushes ----
-        while (quietSinglePush != 0) {
-            int to = BitHelper.lsb(quietSinglePush);
-            long toMask = 1L << to;
-            int from = (ourColor == Constants.WHITE) ? to - 8 : to + 8;
-
-            moves[moveCount++] = Move.encode(from, to, 0, Constants.QUIET);
-            quietSinglePush ^= toMask;
+        // Quiet single pushes
+        while (quiet != 0) {
+            int to = BitHelper.lsb(quiet);
+            quiet &= quiet - 1;
+            int from = us == Constants.WHITE ? to - 8 : to + 8;
+            moves[mc++] = Move.encode(from, to, 0, Constants.QUIET);
         }
 
-        // ---- Double pushes ----
-        long doublePushes = (ourColor == Constants.WHITE)
-                ? BitHelper.whiteDoublePush(pawns, empty)
-                : BitHelper.blackDoublePush(pawns, empty);
+        // Double pushes
+        long dbl = us == Constants.WHITE
+            ? BitHelper.whiteDoublePush(pawns, empty)
+            : BitHelper.blackDoublePush(pawns, empty);
 
-        while (doublePushes != 0) {
-            int to = BitHelper.lsb(doublePushes);
-            long toMask = 1L << to;
-            int from = (ourColor == Constants.WHITE) ? to - 16 : to + 16;
-
-            moves[moveCount++] = Move.encode(from, to, 0, Constants.DOUBLE_PAWN_PUSH);
-            doublePushes ^= toMask;
+        while (dbl != 0) {
+            int to = BitHelper.lsb(dbl);
+            dbl &= dbl - 1;
+            int from = us == Constants.WHITE ? to - 16 : to + 16;
+            moves[mc++] = Move.encode(from, to, 0, Constants.DOUBLE_PAWN_PUSH);
         }
 
-        // ---- Pawn captures ----
-        long attacksLeft = (ourColor == Constants.WHITE)
-                ? BitHelper.whiteAttacksLeft(pawns)
-                : BitHelper.blackAttacksLeft(pawns);
+        // Captures
+        long left  = us == Constants.WHITE ? BitHelper.whiteAttacksLeft(pawns)  : BitHelper.blackAttacksLeft(pawns);
+        long right = us == Constants.WHITE ? BitHelper.whiteAttacksRight(pawns) : BitHelper.blackAttacksRight(pawns);
 
-        long attacksRight = (ourColor == Constants.WHITE)
-                ? BitHelper.whiteAttacksRight(pawns)
-                : BitHelper.blackAttacksRight(pawns);
+        long leftCaps  = left  & opp;
+        long rightCaps = right & opp;
 
-        long leftCaps  = attacksLeft  & opp;
-        long rightCaps = attacksRight & opp;
+        long promoLeft  = leftCaps  & promoRank;
+        long promoRight = rightCaps & promoRank;
 
-        long leftPromoCaps  = leftCaps  & promotionRank;
-        long rightPromoCaps = rightCaps & promotionRank;
-
-        // Promotion captures (skip if victim is king)
-        while (leftPromoCaps != 0) {
-            int to = BitHelper.lsb(leftPromoCaps);
-            long toMask = 1L << to;
-
-            if (!isOppKingOn(board, to)) {
-                int from = (ourColor == Constants.WHITE) ? (to - 7) : (to + 9);
-
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_QUEEN : Constants.B_QUEEN,
-                        Constants.PROMO_QUEEN_CAPTURE);
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_ROOK : Constants.B_ROOK,
-                        Constants.PROMO_ROOK_CAPTURE);
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_BISHOP : Constants.B_BISHOP,
-                        Constants.PROMO_BISHOP_CAPTURE);
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_KNIGHT : Constants.B_KNIGHT,
-                        Constants.PROMO_KNIGHT_CAPTURE);
-            }
-
-            leftPromoCaps ^= toMask;
+        while (promoLeft != 0) {
+            int to = BitHelper.lsb(promoLeft);
+            promoLeft &= promoLeft - 1;
+            int from = us == Constants.WHITE ? to - 7 : to + 9;
+            mc = addPromoCaps(moves, mc, from, to, us);
         }
 
-        while (rightPromoCaps != 0) {
-            int to = BitHelper.lsb(rightPromoCaps);
-            long toMask = 1L << to;
-
-            if (!isOppKingOn(board, to)) {
-                int from = (ourColor == Constants.WHITE) ? (to - 9) : (to + 7);
-
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_QUEEN : Constants.B_QUEEN,
-                        Constants.PROMO_QUEEN_CAPTURE);
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_ROOK : Constants.B_ROOK,
-                        Constants.PROMO_ROOK_CAPTURE);
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_BISHOP : Constants.B_BISHOP,
-                        Constants.PROMO_BISHOP_CAPTURE);
-                moves[moveCount++] = Move.encode(from, to,
-                        (ourColor == Constants.WHITE) ? Constants.W_KNIGHT : Constants.B_KNIGHT,
-                        Constants.PROMO_KNIGHT_CAPTURE);
-            }
-
-            rightPromoCaps ^= toMask;
+        while (promoRight != 0) {
+            int to = BitHelper.lsb(promoRight);
+            promoRight &= promoRight - 1;
+            int from = us == Constants.WHITE ? to - 9 : to + 7;
+            mc = addPromoCaps(moves, mc, from, to, us);
         }
 
-        // Normal captures (skip if victim is king)
-        long leftQuietCaps  = leftCaps  & ~promotionRank;
-        long rightQuietCaps = rightCaps & ~promotionRank;
+        long quietLeft  = leftCaps  & ~promoRank;
+        long quietRight = rightCaps & ~promoRank;
 
-        while (leftQuietCaps != 0) {
-            int to = BitHelper.lsb(leftQuietCaps);
-            long toMask = 1L << to;
-
-            if (!isOppKingOn(board, to)) {
-                int from = (ourColor == Constants.WHITE) ? (to - 7) : (to + 9);
-                moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
-            }
-
-            leftQuietCaps ^= toMask;
+        while (quietLeft != 0) {
+            int to = BitHelper.lsb(quietLeft);
+            quietLeft &= quietLeft - 1;
+            int from = us == Constants.WHITE ? to - 7 : to + 9;
+            moves[mc++] = Move.encode(from, to, 0, Constants.CAPTURE);
         }
 
-        while (rightQuietCaps != 0) {
-            int to = BitHelper.lsb(rightQuietCaps);
-            long toMask = 1L << to;
-
-            if (!isOppKingOn(board, to)) {
-                int from = (ourColor == Constants.WHITE) ? (to - 9) : (to + 7);
-                moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
-            }
-
-            rightQuietCaps ^= toMask;
+        while (quietRight != 0) {
+            int to = BitHelper.lsb(quietRight);
+            quietRight &= quietRight - 1;
+            int from = us == Constants.WHITE ? to - 9 : to + 7;
+            moves[mc++] = Move.encode(from, to, 0, Constants.CAPTURE);
         }
 
-        // ---- En passant ---- (can never capture a king)
+        // En passant
         if (board.enPassantSquare != -1) {
-            long epMask = 1L << board.enPassantSquare;
+            int ep = board.enPassantSquare;
+            long epMask = 1L << ep;
 
-            if (ourColor == Constants.WHITE) {
-                long leftEP  = (pawns << 7) & Constants.notHFile & epMask;
-                long rightEP = (pawns << 9) & Constants.notAFile & epMask;
-
-                if (leftEP != 0) {
-                    int to = board.enPassantSquare;
-                    int from = to - 7;
-                    moves[moveCount++] = Move.encode(from, to, 0, Constants.EN_PASSANT);
-                }
-                if (rightEP != 0) {
-                    int to = board.enPassantSquare;
-                    int from = to - 9;
-                    moves[moveCount++] = Move.encode(from, to, 0, Constants.EN_PASSANT);
-                }
-
+            if (us == Constants.WHITE) {
+                if (((pawns << 7) & Constants.notHFile & epMask) != 0)
+                    moves[mc++] = Move.encode(ep - 7, ep, 0, Constants.EN_PASSANT);
+                if (((pawns << 9) & Constants.notAFile & epMask) != 0)
+                    moves[mc++] = Move.encode(ep - 9, ep, 0, Constants.EN_PASSANT);
             } else {
-                long leftEP  = (pawns >>> 9) & Constants.notHFile & epMask;
-                long rightEP = (pawns >>> 7) & Constants.notAFile & epMask;
-
-                if (leftEP != 0) {
-                    int to = board.enPassantSquare;
-                    int from = to + 9;
-                    moves[moveCount++] = Move.encode(from, to, 0, Constants.EN_PASSANT);
-                }
-                if (rightEP != 0) {
-                    int to = board.enPassantSquare;
-                    int from = to + 7;
-                    moves[moveCount++] = Move.encode(from, to, 0, Constants.EN_PASSANT);
-                }
+                if (((pawns >>> 9) & Constants.notHFile & epMask) != 0)
+                    moves[mc++] = Move.encode(ep + 9, ep, 0, Constants.EN_PASSANT);
+                if (((pawns >>> 7) & Constants.notAFile & epMask) != 0)
+                    moves[mc++] = Move.encode(ep + 7, ep, 0, Constants.EN_PASSANT);
             }
         }
 
-        return moveCount;
+        return mc;
     }
 
-    public static int generateKnightMoves(Board board, int[] moves, int moveCount) {
+    private static int addPromoCaps(int[] moves, int mc, int from, int to, int us) {
+        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_QUEEN  : Constants.B_QUEEN,  Constants.PROMO_QUEEN_CAPTURE);
+        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_ROOK   : Constants.B_ROOK,   Constants.PROMO_ROOK_CAPTURE);
+        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_BISHOP : Constants.B_BISHOP, Constants.PROMO_BISHOP_CAPTURE);
+        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_KNIGHT : Constants.B_KNIGHT, Constants.PROMO_KNIGHT_CAPTURE);
+        return mc;
+    }
+
+
+
+    public static int generateKnightMoves(Board board, int[] moves, int mc) {
         long knights = board.sideToMove == Constants.WHITE ? board.whiteKnights : board.blackKnights;
-        long own     = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
-        long oppBB   = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
+        long own     = board.sideToMove == Constants.WHITE ? board.whitePieces  : board.blackPieces;
+        long opp     = board.sideToMove == Constants.WHITE ? board.blackPieces  : board.whitePieces;
 
         while (knights != 0) {
             int from = BitHelper.lsb(knights);
-            long fromMask = 1L << from;
-            knights ^= fromMask;
+            knights &= knights - 1;
 
             long targets = Constants.KNIGHT_MASKS[from] & ~own;
-
             while (targets != 0) {
                 int to = BitHelper.lsb(targets);
-                long toMask = 1L << to;
-                targets ^= toMask;
-
-                boolean isCap = (toMask & oppBB) != 0;
-                if (isCap && isOppKingOn(board, to)) continue; // <<< forbid king capture
-
-                int flag = isCap ? Constants.CAPTURE : Constants.QUIET;
-                moves[moveCount++] = Move.encode(from, to, 0, flag);
+                targets &= targets - 1;
+                int flag = ((1L << to) & opp) != 0 ? Constants.CAPTURE : Constants.QUIET;
+                moves[mc++] = Move.encode(from, to, 0, flag);
             }
         }
-        return moveCount;
+        return mc;
     }
 
 
-    public static int generateBishopMoves(Board board, int[] moves, int moveCount){
-        long bishops = board.sideToMove == Constants.WHITE ? board.whiteBishops : board.blackBishops;
-        long own     = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
-        long oppBB   = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
-
-        while (bishops != 0) {
-            int from = BitHelper.lsb(bishops);
-            long fromMask = 1L << from;
-            bishops ^= fromMask;
-
-            long targets = generateBishopRays(board.allPieces, from) & ~own;
-
-            while (targets != 0) {
-                int to = BitHelper.lsb(targets);
-                long toMask = 1L << to;
-                targets ^= toMask;
-
-                boolean isCap = (toMask & oppBB) != 0;
-                if (isCap && isOppKingOn(board, to)) continue;
-
-                int flag = isCap ? Constants.CAPTURE : Constants.QUIET;
-                moves[moveCount++] = Move.encode(from, to, 0, flag);
-            }
-        }
-        return moveCount;
+    public static int generateBishopMoves(Board board, int[] moves, int mc) {
+        return generateSlidingMoves(board, moves, mc,
+            board.sideToMove == Constants.WHITE ? board.whiteBishops : board.blackBishops,
+            true, false);
     }
 
-    public static int generateRookMoves(Board board, int[] moves, int moveCount){
-        long rooks = board.sideToMove == Constants.WHITE ? board.whiteRooks : board.blackRooks;
-        long own   = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
-        long oppBB = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
-
-        while (rooks != 0) {
-            int from = BitHelper.lsb(rooks);
-            long fromMask = 1L << from;
-            rooks ^= fromMask;
-
-            long targets = generateRookRays(board.allPieces, from) & ~own;
-
-            while (targets != 0) {
-                int to = BitHelper.lsb(targets);
-                long toMask = 1L << to;
-                targets ^= toMask;
-
-                boolean isCap = (toMask & oppBB) != 0;
-                if (isCap && isOppKingOn(board, to)) continue;
-
-                int flag = isCap ? Constants.CAPTURE : Constants.QUIET;
-                moves[moveCount++] = Move.encode(from, to, 0, flag);
-            }
-        }
-        return moveCount;
+    public static int generateRookMoves(Board board, int[] moves, int mc) {
+        return generateSlidingMoves(board, moves, mc,
+            board.sideToMove == Constants.WHITE ? board.whiteRooks : board.blackRooks,
+            false, true);
     }
 
-    public static int generateQueenMoves(Board board, int[] moves, int moveCount){
-        long queens = board.sideToMove == Constants.WHITE ? board.whiteQueens : board.blackQueens;
-        long own    = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
-        long oppBB  = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
+    public static int generateQueenMoves(Board board, int[] moves, int mc) {
+        return generateSlidingMoves(board, moves, mc,
+            board.sideToMove == Constants.WHITE ? board.whiteQueens : board.blackQueens,
+            true, true);
+    }
 
-        while (queens != 0) {
-            int from = BitHelper.lsb(queens);
-            long fromMask = 1L << from;
-            queens ^= fromMask;
+    private static int generateSlidingMoves(Board board, int[] moves, int mc,
+        long pieces, boolean diag, boolean ortho) {
 
-            long targets = generateQueenRays(board.allPieces, from) & ~own;
+        long own = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
+        long opp = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
 
-            while (targets != 0) {
-                int to = BitHelper.lsb(targets);
-                long toMask = 1L << to;
-                targets ^= toMask;
+        while (pieces != 0) {
+            int from = BitHelper.lsb(pieces);
+            pieces &= pieces - 1;
 
-                boolean isCap = (toMask & oppBB) != 0;
-                if (isCap && isOppKingOn(board, to)) continue;
+            long attacks = 0;
+            if (diag)  attacks |= generateBishopRays(board.allPieces, from);
+            if (ortho) attacks |= generateRookRays(board.allPieces, from);
 
-                int flag = isCap ? Constants.CAPTURE : Constants.QUIET;
-                moves[moveCount++] = Move.encode(from, to, 0, flag);
+            attacks &= ~own;
+
+            while (attacks != 0) {
+                int to = BitHelper.lsb(attacks);
+                attacks &= attacks - 1;
+                int flag = ((1L << to) & opp) != 0 ? Constants.CAPTURE : Constants.QUIET;
+                moves[mc++] = Move.encode(from, to, 0, flag);
             }
         }
-        return moveCount;
+        return mc;
     }
 
     public static int generateKingMoves(Board board, int[] moves, int moveCount){
-        long king  = board.sideToMove == Constants.WHITE ? board.whiteKing : board.blackKing;
-        long own   = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
-        long oppBB = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
+        long king = board.sideToMove == Constants.WHITE ? board.whiteKing : board.blackKing;
+        long own  = board.sideToMove == Constants.WHITE ? board.whitePieces : board.blackPieces;
+        long opp  = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
 
         int from = BitHelper.lsb(king);
         long targets = Constants.KING_MASKS[from] & ~own;
 
         while (targets != 0) {
             int to = BitHelper.lsb(targets);
-            long toMask = 1L << to;
-            targets ^= toMask;
+            targets &= targets - 1;
 
-            // Can't move king into check
             if (AttackGenerator.isSquareAttacked(board, to, board.sideToMove ^ 1)) continue;
 
-            boolean isCap = (toMask & oppBB) != 0;
-            if (isCap && isOppKingOn(board, to)) continue; // forbid king capture (should never happen anyway)
-
-            int flag = isCap ? Constants.CAPTURE : Constants.QUIET;
+            int flag = ((1L << to) & opp) != 0 ? Constants.CAPTURE : Constants.QUIET;
             moves[moveCount++] = Move.encode(from, to, 0, flag);
         }
+
 
         // Castling (unchanged)
         if (board.sideToMove == Constants.WHITE) {
@@ -454,7 +327,6 @@ public class MoveGenerator {
             int to = BitHelper.lsb(promoLeft);
             promoLeft &= promoLeft - 1;
 
-            if (isOppKingOn(board, to)) continue;
 
             int from = (us == Constants.WHITE) ? to - 7 : to + 9;
             moveCount = addPromoCaps(moves, moveCount, from, to, us);
@@ -464,7 +336,6 @@ public class MoveGenerator {
             int to = BitHelper.lsb(promoRight);
             promoRight &= promoRight - 1;
 
-            if (isOppKingOn(board, to)) continue;
 
             int from = (us == Constants.WHITE) ? to - 9 : to + 7;
             moveCount = addPromoCaps(moves, moveCount, from, to, us);
@@ -477,7 +348,6 @@ public class MoveGenerator {
             int to = BitHelper.lsb(quietLeft);
             quietLeft &= quietLeft - 1;
 
-            if (isOppKingOn(board, to)) continue;
 
             int from = (us == Constants.WHITE) ? to - 7 : to + 9;
             moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
@@ -487,7 +357,6 @@ public class MoveGenerator {
             int to = BitHelper.lsb(quietRight);
             quietRight &= quietRight - 1;
 
-            if (isOppKingOn(board, to)) continue;
 
             int from = (us == Constants.WHITE) ? to - 9 : to + 7;
             moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
@@ -514,14 +383,6 @@ public class MoveGenerator {
         return moveCount;
     }
 
-    private static int addPromoCaps(int[] moves, int mc, int from, int to, int us) {
-        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_QUEEN  : Constants.B_QUEEN,  Constants.PROMO_QUEEN_CAPTURE);
-        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_ROOK   : Constants.B_ROOK,   Constants.PROMO_ROOK_CAPTURE);
-        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_BISHOP : Constants.B_BISHOP, Constants.PROMO_BISHOP_CAPTURE);
-        moves[mc++] = Move.encode(from, to, us == Constants.WHITE ? Constants.W_KNIGHT : Constants.B_KNIGHT, Constants.PROMO_KNIGHT_CAPTURE);
-        return mc;
-    }
-
 
     private static int generateKnightCaptures(Board board, int[] moves, int moveCount) {
         long knights = board.sideToMove == Constants.WHITE ? board.whiteKnights : board.blackKnights;
@@ -536,7 +397,6 @@ public class MoveGenerator {
                 int to = BitHelper.lsb(targets);
                 targets &= targets - 1;
 
-                if (isOppKingOn(board, to)) continue;
 
                 moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
             }
@@ -582,7 +442,6 @@ public class MoveGenerator {
                 int to = BitHelper.lsb(caps);
                 caps &= caps - 1;
 
-                if (isOppKingOn(board, to)) continue;
 
                 moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
             }
@@ -590,23 +449,21 @@ public class MoveGenerator {
         return moveCount;
     }
 
-    private static int generateKingCaptures(Board board, int[] moves, int moveCount) {
-        long king  = board.sideToMove == Constants.WHITE ? board.whiteKing : board.blackKing;
-        long oppBB = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
+    private static int generateKingCaptures(Board board, int[] moves, int mc) {
+        long king = board.sideToMove == Constants.WHITE ? board.whiteKing : board.blackKing;
+        long opp  = board.sideToMove == Constants.WHITE ? board.blackPieces : board.whitePieces;
 
         int from = BitHelper.lsb(king);
-        long targets = Constants.KING_MASKS[from] & oppBB;
+        long targets = Constants.KING_MASKS[from] & opp;
 
         while (targets != 0) {
             int to = BitHelper.lsb(targets);
             targets &= targets - 1;
-
-            if (isOppKingOn(board, to)) continue;
-
-            moves[moveCount++] = Move.encode(from, to, 0, Constants.CAPTURE);
+            moves[mc++] = Move.encode(from, to, 0, Constants.CAPTURE);
         }
-        return moveCount;
+        return mc;
     }
+
 
 
 
