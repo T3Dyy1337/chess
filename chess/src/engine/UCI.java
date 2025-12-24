@@ -42,7 +42,7 @@ public final class UCI {
       else if (line.equals("ucinewgame")) {
         board.clear();
         board.loadFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-        search.clear();
+        //search.clear();
       }
 
 
@@ -109,9 +109,9 @@ public final class UCI {
     }
 
     long timeForMove = computeTimeForMove(wtime, btime, winc, binc);
-    int bestMove = search.searchTimed(board, depth, timeForMove);
+    //int bestMove = search.searchTimed(board, depth, timeForMove);
 
-    System.out.println("bestmove " + Move.toUCI(bestMove));
+    //System.out.println("bestmove " + Move.toUCI(bestMove));
   }
 
   private long computeTimeForMove(long wtime, long btime, long winc, long binc) {

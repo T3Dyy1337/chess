@@ -38,9 +38,13 @@ public final class Move {
         return (move >>> 16) & FLAG_MASK;
     }
 
-    public static boolean isCapture(int move){
-        return flags(move) == 1 || flags(move) <= 12;
+    public static boolean isCapture(int move) {
+        int f = flags(move);
+        return f == Constants.CAPTURE
+            || f == Constants.EN_PASSANT
+            || (f >= Constants.PROMO_KNIGHT_CAPTURE && f <= Constants.PROMO_QUEEN_CAPTURE);
     }
+
 
     private static String squareToString(int sq) {
         char file = (char) ('a' + (sq & 7));

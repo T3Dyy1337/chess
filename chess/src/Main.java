@@ -18,29 +18,11 @@ public class Main {
         //testSearch(b,search,12);
 
         //System.out.println(Perft.perft(b,6));
-        ConsoleGame.play(true,null);
+        ConsoleGame.play(false,"1r2n1k1/pr1n3p/Q3bqp1/4p3/4P3/1P3PP1/P4BB1/K1R3NR b - - 10 29");
     }
 
 
-    public static void testSearch(Board board, Search search, int depth) {
-        long start = System.currentTimeMillis();
-        int bestMove = search.search(board, depth);
-        long end = System.currentTimeMillis();
 
-        System.out.println("Best move: " + Move.toUCI(bestMove));
-        System.out.println("Nodes searched: " + search.nodesSearched);
-        System.out.println("Time (ms): " + (end - start));
-        double sec = (end - start) / 1000.0;
-        System.out.println("NPS: " + (long)(search.nodesSearched / Math.max(0.001, sec)));
-
-        System.out.print("PV: ");
-        for (int i = 0; i < search.pvLength[0]; i++) {
-            int move = search.pvMoves[0][i];
-            System.out.print(Move.toUCI(move) + " ");
-        }
-        System.out.println();
-
-        }
 
     }
 

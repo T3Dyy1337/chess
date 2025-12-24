@@ -8,7 +8,7 @@ public class TranspositionTable {
 
 
 
-    public static final int MATE_THRESHOLD = 30000;
+    public static final int MATE_THRESHOLD = 32000;
 
     private static final int BUCKET_SIZE = 4;
 
@@ -29,6 +29,9 @@ public class TranspositionTable {
     private volatile int currentGeneration = 1;
 
     private int numBuckets;
+
+    private final ProbeResult probeResult = new ProbeResult();
+
 
     //Probe result status flags
 
@@ -112,26 +115,14 @@ public class TranspositionTable {
 
         for (int i = entryIndex; i < entryIndex + BUCKET_SIZE; i++) {
             if (hashes[i] == 0) {
+                hashes[i] = hash;
                 depths[i] = depth;
                 flags[i] = flag;
                 scores[i] = score;
                 bestMoves[i] = bestMove;
                 ages[i] = currentGeneration;
-                hashes[i] = hash;
-                return;
-            }
-        }
 
-
-        for (int i = entryIndex; i < entryIndex + BUCKET_SIZE; i++) {
-            if (hashes[i] == 0) {
-                depths[i] = depth;
-                flags[i] = flag;
-                scores[i] = score;
-                bestMoves[i] = bestMove;
-                ages[i] = currentGeneration;
-                hashes[i] = hash;
-
+                // enforce invariant: slot 0 has deepest
                 if (i != entryIndex && depths[i] > depths[entryIndex]) {
                     swap(entryIndex, i);
                 }
@@ -153,10 +144,11 @@ public class TranspositionTable {
         int oldestAge = ages[victim];
 
         for (int i = entryIndex + 2; i < entryIndex + BUCKET_SIZE; i++) {
-            if (ages[i] < oldestAge) {
-                oldestAge = ages[i];
+            if (depths[i] < depths[victim]
+                || (depths[i] == depths[victim] && ages[i] < ages[victim])) {
                 victim = i;
             }
+
         }
 
         depths[victim] = depth;
@@ -168,7 +160,7 @@ public class TranspositionTable {
     }
 
     public ProbeResult probe(long hash, int depth, int alpha, int beta, int ply) {
-        ProbeResult result = new ProbeResult();
+        ProbeResult result = probeResult;
         result.status = MISS;
 
         int bucketIndex = (int) hash & (numBuckets - 1);

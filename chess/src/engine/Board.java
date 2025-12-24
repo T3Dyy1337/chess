@@ -4,7 +4,7 @@ import util.BitHelper;
 import util.Constants;
 import util.Zobrist;
 
-public class Board {
+public class Board implements CloneableBoard {
 
     public long whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing;
     public long blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKing;
@@ -21,6 +21,18 @@ public class Board {
 
     public int whiteKingSq = -1;
     public int blackKingSq = -1;
+
+    public int whiteNonPawnMaterial;
+    public int blackNonPawnMaterial;
+
+
+    public long[] keyHistory = new long[256];
+    public int historyPly = 0;
+
+    // index after last capture or pawn move
+    public int lastIrreversiblePly = 0;
+
+
 
     private final int[] pieceAt = new int[64];
     private final Undo[] undoStack = new Undo[2048];
@@ -47,7 +59,13 @@ public class Board {
         whiteKingSq = -1;
         blackKingSq = -1;
 
+        whiteNonPawnMaterial = 0;
+        blackNonPawnMaterial = 0;
+
         for (int i = 0; i < 64; i++) pieceAt[i] = -1;
+        historyPly = 0;
+        lastIrreversiblePly = 0;
+
         undoTop = 0;
     }
 
@@ -70,10 +88,10 @@ public class Board {
 
             switch (c) {
                 case 'P' -> { whitePawns |= bit; pieceAt[sq] = Constants.W_PAWN; }
-                case 'N' -> { whiteKnights |= bit; pieceAt[sq] = Constants.W_KNIGHT; }
-                case 'B' -> { whiteBishops |= bit; pieceAt[sq] = Constants.W_BISHOP; }
-                case 'R' -> { whiteRooks |= bit; pieceAt[sq] = Constants.W_ROOK; }
-                case 'Q' -> { whiteQueens |= bit; pieceAt[sq] = Constants.W_QUEEN; }
+                case 'N' -> { whiteKnights |= bit; pieceAt[sq] = Constants.W_KNIGHT; whiteNonPawnMaterial += 3; }
+                case 'B' -> { whiteBishops |= bit; pieceAt[sq] = Constants.W_BISHOP; whiteNonPawnMaterial += 3; }
+                case 'R' -> { whiteRooks |= bit;   pieceAt[sq] = Constants.W_ROOK;   whiteNonPawnMaterial += 5; }
+                case 'Q' -> { whiteQueens |= bit;  pieceAt[sq] = Constants.W_QUEEN;  whiteNonPawnMaterial += 9; }
                 case 'K' -> {
                     whiteKing |= bit;
                     whiteKingSq = sq;
@@ -81,10 +99,10 @@ public class Board {
                 }
 
                 case 'p' -> { blackPawns |= bit; pieceAt[sq] = Constants.B_PAWN; }
-                case 'n' -> { blackKnights |= bit; pieceAt[sq] = Constants.B_KNIGHT; }
-                case 'b' -> { blackBishops |= bit; pieceAt[sq] = Constants.B_BISHOP; }
-                case 'r' -> { blackRooks |= bit; pieceAt[sq] = Constants.B_ROOK; }
-                case 'q' -> { blackQueens |= bit; pieceAt[sq] = Constants.B_QUEEN; }
+                case 'n' -> { blackKnights |= bit; pieceAt[sq] = Constants.B_KNIGHT; blackNonPawnMaterial += 3; }
+                case 'b' -> { blackBishops |= bit; pieceAt[sq] = Constants.B_BISHOP; blackNonPawnMaterial += 3; }
+                case 'r' -> { blackRooks |= bit;   pieceAt[sq] = Constants.B_ROOK;   blackNonPawnMaterial += 5; }
+                case 'q' -> { blackQueens |= bit;  pieceAt[sq] = Constants.B_QUEEN;  blackNonPawnMaterial += 9; }
                 case 'k' -> {
                     blackKing |= bit;
                     blackKingSq = sq;
@@ -112,6 +130,9 @@ public class Board {
         allPieces = whitePieces | blackPieces;
 
         zobristKey = Zobrist.hash(this);
+        historyPly = 0;
+        lastIrreversiblePly = 0;
+
     }
 
     public boolean isInCheck() {
@@ -153,6 +174,12 @@ public class Board {
         if (isWhitePiece(piece)) whitePieces &= ~bb;
         else blackPieces &= ~bb;
         allPieces &= ~bb;
+        int m = pieceMaterial(piece);
+        if (m != 0) {
+            if (isWhitePiece(piece)) whiteNonPawnMaterial -= m;
+            else blackNonPawnMaterial -= m;
+        }
+
     }
 
     private void addPieceNoHash(int piece, int sq) {
@@ -179,6 +206,13 @@ public class Board {
         if (isWhitePiece(piece)) whitePieces |= bb;
         else blackPieces |= bb;
         allPieces |= bb;
+
+        int m = pieceMaterial(piece);
+        if (m != 0) {
+            if (isWhitePiece(piece)) whiteNonPawnMaterial += m;
+            else blackNonPawnMaterial += m;
+        }
+
     }
 
     private void addPiece(int piece, int sq) {
@@ -228,6 +262,8 @@ public class Board {
                 ", to-square: " + to + ", flag :" + flag);
         }
 
+
+
         final Undo u = undoStack[undoTop++];
         u.move = move;
         u.movingPiece = movingPiece;
@@ -236,6 +272,17 @@ public class Board {
         u.halfmoveClock = halfmoveClock;
         u.fullmoveNumber = fullmoveNumber;
         u.zobristKey = zobristKey;
+        u.lastIrreversiblePly = lastIrreversiblePly;
+
+        keyHistory[historyPly++] = zobristKey;
+
+        if (flag == Constants.CAPTURE
+            || flag == Constants.EN_PASSANT
+            || (flag >= Constants.PROMO_KNIGHT && flag <= Constants.PROMO_QUEEN)
+            || movingPiece == Constants.W_PAWN || movingPiece == Constants.B_PAWN) {
+
+            lastIrreversiblePly = historyPly;
+        }
 
         int capturedPiece = -1;
         if (flag == Constants.EN_PASSANT) {
@@ -365,6 +412,10 @@ public class Board {
         }
 
         zobristKey = u.zobristKey;
+        historyPly--;
+        lastIrreversiblePly = u.lastIrreversiblePly;
+
+
     }
 
     public void print() {
@@ -402,6 +453,140 @@ public class Board {
             default -> '.';
         };
     }
+
+
+    @Override public Board copy() {
+        Board b = new Board();
+
+        // bitboards
+        b.whitePawns = whitePawns;
+        b.whiteKnights = whiteKnights;
+        b.whiteBishops = whiteBishops;
+        b.whiteRooks = whiteRooks;
+        b.whiteQueens = whiteQueens;
+        b.whiteKing = whiteKing;
+
+        b.blackPawns = blackPawns;
+        b.blackKnights = blackKnights;
+        b.blackBishops = blackBishops;
+        b.blackRooks = blackRooks;
+        b.blackQueens = blackQueens;
+        b.blackKing = blackKing;
+
+        b.whitePieces = whitePieces;
+        b.blackPieces = blackPieces;
+        b.allPieces = allPieces;
+
+        b.sideToMove = sideToMove;
+        b.castlingRights = castlingRights;
+        b.enPassantSquare = enPassantSquare;
+        b.halfmoveClock = halfmoveClock;
+        b.fullmoveNumber = fullmoveNumber;
+
+        b.zobristKey = zobristKey;
+
+        b.whiteKingSq = whiteKingSq;
+        b.blackKingSq = blackKingSq;
+
+        // pieceAt
+        System.arraycopy(this.pieceAt, 0, b.pieceAt, 0, 64);
+
+        // history
+        b.historyPly = historyPly;
+        b.lastIrreversiblePly = lastIrreversiblePly;
+        System.arraycopy(this.keyHistory, 0, b.keyHistory, 0, historyPly);
+
+        // undo stack
+        b.undoTop = undoTop;
+        for (int i = 0; i < undoTop; i++) {
+            b.undoStack[i].copyFrom(this.undoStack[i]);
+        }
+
+        return b;
+    }
+
+    public void makeNullMove() {
+        Undo u = undoStack[undoTop++];
+
+        u.move = 0;
+        u.castlingRights = castlingRights;
+        u.enPassantSquare = enPassantSquare;
+        u.halfmoveClock = halfmoveClock;
+        u.fullmoveNumber = fullmoveNumber;
+        u.zobristKey = zobristKey;
+        u.lastIrreversiblePly = lastIrreversiblePly;
+
+        keyHistory[historyPly++] = zobristKey;
+
+        if (enPassantSquare != -1) {
+            zobristKey ^= Zobrist.ENPASSANT_KEYS[enPassantSquare];
+            enPassantSquare = -1;
+        }
+
+        sideToMove ^= 1;
+        zobristKey ^= Zobrist.SIDE_TO_MOVE_KEY;
+
+        halfmoveClock++;
+
+    }
+
+    public void unmakeNullMove() {
+        Undo u = undoStack[--undoTop];
+
+        castlingRights = u.castlingRights;
+        enPassantSquare = u.enPassantSquare;
+        halfmoveClock = u.halfmoveClock;
+        fullmoveNumber = u.fullmoveNumber;
+        zobristKey = u.zobristKey;
+
+        sideToMove ^= 1;
+
+        historyPly--;
+        lastIrreversiblePly = u.lastIrreversiblePly;
+    }
+
+    private static int pieceMaterial(int piece) {
+        return switch (piece) {
+            case Constants.W_KNIGHT, Constants.B_KNIGHT -> 3;
+            case Constants.W_BISHOP, Constants.B_BISHOP -> 3;
+            case Constants.W_ROOK,   Constants.B_ROOK   -> 5;
+            case Constants.W_QUEEN,  Constants.B_QUEEN  -> 9;
+            default -> 0;
+        };
+    }
+
+    public int nonPawnMaterial(int side) {
+        return side == Constants.WHITE
+            ? whiteNonPawnMaterial
+            : blackNonPawnMaterial;
+    }
+
+    public boolean isRepetition() {
+        long key = zobristKey;
+
+        // Go backwards in steps of 2 plies (same side to move),
+        // but STOP at last irreversible move
+        for (int i = historyPly - 2; i >= lastIrreversiblePly; i -= 2) {
+            if (keyHistory[i] == key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isThreefoldRepetition() {
+        long key = zobristKey;
+        int count = 1;
+
+        for (int i = historyPly - 2; i >= 0; i -= 2) {
+            if (keyHistory[i] == key) {
+                count++;
+                if (count == 3) return true;
+            }
+        }
+        return false;
+    }
+
 
 
 }
