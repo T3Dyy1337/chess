@@ -8,7 +8,7 @@ public final class ConsoleGame {
 
   public static void play(boolean enginePlaysWhite, String fen) {
     Board board = new Board();
-    TranspositionTable tt = new TranspositionTable(512);
+    TranspositionTable tt = new TranspositionTable(1024);
     if (fen == null) board.loadFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     else board.loadFEN(fen);
 
@@ -24,7 +24,7 @@ public final class ConsoleGame {
       if ((board.sideToMove == Constants.WHITE) == enginePlaysWhite) {
         long start = System.currentTimeMillis();
 
-        int move = search.search(board, 10);
+        int move = search.search(board, 12);
 
         long elapsed = System.currentTimeMillis() - start;
         double seconds = elapsed / 1000.0;
@@ -34,7 +34,7 @@ public final class ConsoleGame {
 
 
         if (move == 0) {
-          if (board.isRepetition()) {
+          if (board.isThreefoldRepetition()) {
             System.out.println("Draw by repetition");
           } else if (board.halfmoveClock >= 100) {
             System.out.println("Draw by 50-move rule");
@@ -81,10 +81,9 @@ public final class ConsoleGame {
       );
 
       board.unmakeMove();
-      if (legal) return false; // has at least one legal move
+      if (legal) return false;
     }
 
-    // No legal moves
     if (board.isInCheck()) {
       System.out.println("Checkmate. " +
           (board.sideToMove == Constants.WHITE ? "Black wins." : "White wins."));

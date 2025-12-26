@@ -101,9 +101,8 @@ public final class ClassicalEvaluator {
         int trapped = trappedPieces(b, cache);
 
         // --- King safety ---
-        int kingSafetyMg = kingSafety(b, cache);
-        int kingSafetyEg = kingSafety(b, cache);
-        int kingSafety = taper(kingSafetyMg, kingSafetyEg, phase);
+        int kingSafetyG = kingSafety(b, cache);
+        int kingSafety = taper(kingSafetyG, kingSafetyG, phase);
 
         // --- Space ---
         int space = space(cache);
@@ -183,32 +182,25 @@ public final class ClassicalEvaluator {
     private static int evalPawnStructureSide(long myPawns, long oppPawns, boolean white) {
         int s = 0;
 
-        for (int f = 0; f < 8; f++) {
-            long file = Constants.FILE_MASKS[f];
-            int count = BitHelper.popcount(myPawns & file);
-            if (count > 1) s -= DOUBLED_PAWN_PENALTY * (count - 1);
-        }
+        long p = myPawns;
 
-        for (int f = 0; f < 8; f++) {
-            long file = Constants.FILE_MASKS[f];
-            long pawnsOnFile = myPawns & file;
-            if (pawnsOnFile == 0) continue;
-
-            long adj = 0;
-            if (f > 0) adj |= Constants.FILE_MASKS[f - 1];
-            if (f < 7) adj |= Constants.FILE_MASKS[f + 1];
-
-            if ((myPawns & adj) == 0) {
-                s -= ISOLATED_PAWN_PENALTY * BitHelper.popcount(pawnsOnFile);
-            }
-        }
-
-        long my = myPawns;
-        while (my != 0) {
-            int sq = Long.numberOfTrailingZeros(my);
-            my &= my - 1;
+        while (p != 0) {
+            int sq = Long.numberOfTrailingZeros(p);
+            p &= p - 1;
 
             int file = sq & 7;
+            long fileMask = Constants.FILE_MASKS[file];
+
+            // doubled
+            int count = BitHelper.popcount(myPawns & fileMask);
+            if (count > 1) s -= DOUBLED_PAWN_PENALTY * (count - 1);
+
+            // isolated
+            long adj = 0;
+            if (file > 0) adj |= Constants.FILE_MASKS[file - 1];
+            if (file < 7) adj |= Constants.FILE_MASKS[file + 1];
+            if ((myPawns & adj) == 0) s -= ISOLATED_PAWN_PENALTY;
+
             long maskFiles = Constants.FILE_MASKS[file];
             if (file > 0) maskFiles |= Constants.FILE_MASKS[file - 1];
             if (file < 7) maskFiles |= Constants.FILE_MASKS[file + 1];
@@ -230,7 +222,7 @@ public final class ClassicalEvaluator {
 
             } else {
                 if (blocked) {
-                    long adj = 0;
+                    adj = 0;
                     if (file > 0) adj |= Constants.FILE_MASKS[file - 1];
                     if (file < 7) adj |= Constants.FILE_MASKS[file + 1];
 

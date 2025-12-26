@@ -566,18 +566,17 @@ public class Board implements CloneableBoard {
         return false;
     }
 
-    public boolean isThreefoldRepetition() {
+    boolean isThreefoldRepetition() {
+        int repeats = 1;
         long key = zobristKey;
-        int count = 1;
 
         for (int i = historyPly - 2; i >= 0; i -= 2) {
-            if (keyHistory[i] == key) {
-                count++;
-                if (count == 3) return true;
-            }
+            if (keyHistory[i] == key) repeats++;
+            if (repeats >= 3) return true;
         }
         return false;
     }
+
 
 
 

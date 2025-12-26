@@ -149,6 +149,9 @@ public final class Search {
 
         switch (ttResult.status) {
             case TranspositionTable.EXACT_HIT, TranspositionTable.BETA_CUTOFF, TranspositionTable.ALPHA_CUTOFF:
+                if (ply == 0 && ttMove != 0){
+                    rootBestMove = ttMove;
+                }
                 return ttResult.score;
 
           case TranspositionTable.SHALLOW_HIT:
@@ -184,6 +187,20 @@ public final class Search {
                 return score;
             }
         }
+
+
+        boolean inCheck = board.isInCheck();
+
+        if (!inCheck && depth <= 2) {
+            int staticEval = evaluate(board);
+
+            int margin = 200 * depth;
+
+            if (staticEval + margin <= alpha) {
+                return staticEval;
+            }
+        }
+
 
 
         int[] moves = context.moves[ply];
@@ -235,7 +252,19 @@ public final class Search {
             }
 
             hasLegalMove = true;
-            boolean inCheck = board.isInCheck();
+            inCheck = board.isInCheck();
+
+            boolean quiet = !Move.isCapture(move);
+
+            if (!inCheck &&
+                quiet &&
+                depth <= 3 &&
+                i > 8 &&
+                !board.isRepetition())
+            {
+                board.unmakeMove();
+                continue;
+            }
 
             int score;
 
@@ -243,7 +272,7 @@ public final class Search {
                 searchedOneLegal = true;
                 score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, true);
             } else {
-                boolean quiet = !Move.isCapture(move);
+                quiet = !Move.isCapture(move);
                 int reduction = 0;
 
                 if (!inCheck && quiet && depth >= 3 && i >= 3) {
@@ -255,10 +284,7 @@ public final class Search {
                 score = -alphaBeta(board, newDepth, -alpha - 1, -alpha, ply + 1, true);
 
                 if (score > alpha) {
-                    score = -alphaBeta(board, depth - 1, -alpha - 1, -alpha, ply + 1, true);
-                    if (score > alpha && score < beta) {
-                        score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, true);
-                    }
+                    score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, true);
                 }
             }
 
