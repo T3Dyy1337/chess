@@ -36,7 +36,7 @@ java -cp out app.ConsoleGame
 
 The engine loads the standard chess starting position and will alternate moves with the user.
 
-🧠 Search Overview
+##🧠 Search Overview
 Move Ordering
 
 - TT move first
