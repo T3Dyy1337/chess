@@ -1,0 +1,30 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.chess'
+version = '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+application {
+    // pick the main entry point you want to run
+    mainClass = 'app.Main'
+}
+
+jar {
+    manifest {
+        attributes(
+                'Main-Class': 'app.Main'
+        )
+    }
+
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
